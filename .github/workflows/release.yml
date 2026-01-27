@@ -43,40 +43,28 @@ jobs:
           cache: true
 
       - name: Build binary
+        id: compile
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
           mkdir -p dist
-          BINARY="raria2-${VERSION}-${GOOS}-${GOARCH}"
+          SAFE_VERSION="${VERSION//\//-}"
+          BINARY="raria2-${SAFE_VERSION}-${GOOS}-${GOARCH}"
           OUTPUT="dist/${BINARY}"
           if [ "${GOOS}" = "windows" ]; then
             OUTPUT="${OUTPUT}.exe"
           fi
           go build -trimpath -ldflags "-s -w" -o "${OUTPUT}" ./main.go
-
-      - name: Package artifact
-        id: package
-        run: |
-          mkdir -p packages
-          SAFE_VERSION="${VERSION//\//-}"
-          ARCHIVE="raria2-${SAFE_VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            PACKAGE="packages/${ARCHIVE}.zip"
-            zip -j "${PACKAGE}" "dist/${ARCHIVE}.exe"
-          else
-            PACKAGE="packages/${ARCHIVE}.tar.gz"
-            tar -C dist -czf "${PACKAGE}" "${ARCHIVE}"
-          fi
-          echo "archive_name=${ARCHIVE}" >> "$GITHUB_OUTPUT"
-          echo "archive_path=${PACKAGE}" >> "$GITHUB_OUTPUT"
+          echo "archive_name=${BINARY}" >> "$GITHUB_OUTPUT"
+          echo "archive_path=${OUTPUT}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.archive_name }}
-          path: ${{ steps.package.outputs.archive_path }}
+          name: ${{ steps.compile.outputs.archive_name }}
+          path: ${{ steps.compile.outputs.archive_path }}
 
   release:
     name: Publish release
