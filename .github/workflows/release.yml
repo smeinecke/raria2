@@ -60,7 +60,8 @@ jobs:
         id: package
         run: |
           mkdir -p packages
-          ARCHIVE="raria2-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          SAFE_VERSION="${VERSION//\//-}"
+          ARCHIVE="raria2-${SAFE_VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
             PACKAGE="packages/${ARCHIVE}.zip"
             zip -j "${PACKAGE}" "dist/${ARCHIVE}.exe"
