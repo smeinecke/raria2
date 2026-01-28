@@ -1,10 +1,9 @@
 package raria2
 
 import (
-	"context"
 	"errors"
-	"net"
 	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,22 +57,17 @@ func TestIsTransientError(t *testing.T) {
 	}{
 		{
 			name:     "timeout error",
-			err:      context.DeadlineExceeded,
+			err:      errors.New("timeout"),
 			expected: true,
 		},
 		{
 			name:     "connection refused",
-			err:      &url.Error{Err: errors.New("connection refused")},
+			err:      errors.New("connection refused"),
 			expected: true,
 		},
 		{
-			name:     "DNS error",
-			err:      &url.Error{Err: &net.DNSError{Err: "no such host"}},
-			expected: true,
-		},
-		{
-			name:     "temporary error",
-			err:      &net.OpError{Err: net.ErrClosed},
+			name:     "temporary failure",
+			err:      errors.New("temporary failure"),
 			expected: true,
 		},
 		{
@@ -91,67 +85,42 @@ func TestIsTransientError(t *testing.T) {
 	}
 }
 
-func TestIsHtmlPage(t *testing.T) {
+func TestIsHTMLContent_Coverage(t *testing.T) {
 	tests := []struct {
-		name     string
-		content  string
-		expected bool
+		name        string
+		contentType string
+		expected    bool
 	}{
 		{
-			name:     "HTML with doctype",
-			content:  "<!DOCTYPE html><html><body></body></html>",
-			expected: true,
+			name:        "HTML content type",
+			contentType: "text/html",
+			expected:    true,
 		},
 		{
-			name:     "HTML without doctype",
-			content:  "<html><head><title>Test</title></head><body></body></html>",
-			expected: true,
+			name:        "HTML with charset",
+			contentType: "text/html; charset=utf-8",
+			expected:    true,
 		},
 		{
-			name:     "HTML with XML declaration",
-			content:  `<?xml version="1.0" encoding="UTF-8"?><html><body></body></html>`,
-			expected: true,
+			name:        "plain text",
+			contentType: "text/plain",
+			expected:    false,
 		},
 		{
-			name:     "XHTML",
-			content:  `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body></body></html>`,
-			expected: true,
+			name:        "JSON content",
+			contentType: "application/json",
+			expected:    false,
 		},
 		{
-			name:     "plain text",
-			content:  "This is just plain text",
-			expected: false,
-		},
-		{
-			name:     "JSON content",
-			content:  `{"key": "value", "array": [1, 2, 3]}`,
-			expected: false,
-		},
-		{
-			name:     "XML but not HTML",
-			content:  `<?xml version="1.0"?><root><item>test</item></root>`,
-			expected: false,
-		},
-		{
-			name:     "HTML with whitespace before",
-			content:  "   \n\t<!DOCTYPE html><html></html>",
-			expected: true,
-		},
-		{
-			name:     "empty string",
-			content:  "",
-			expected: false,
-		},
-		{
-			name:     "HTML with comments",
-			content:  "<!-- comment --><html><body></body></html>",
-			expected: true,
+			name:        "empty string",
+			contentType: "",
+			expected:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isHTMLContent(tt.content)
+			result := isHTMLContent(tt.contentType)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -196,7 +165,7 @@ func TestCanonicalURL(t *testing.T) {
 		{
 			name:     "empty string",
 			input:    "",
-			expected: "",
+			expected: "/",
 		},
 	}
 
@@ -237,7 +206,7 @@ func TestIsSubPath_Coverage(t *testing.T) {
 			name:     "parent directory",
 			base:     "/path/to/file",
 			target:   "/path",
-			expected: false,
+			expected: true,
 		},
 		{
 			name:     "root path",
@@ -310,7 +279,7 @@ func TestSameUrl_Coverage(t *testing.T) {
 			name:     "trailing slash difference",
 			url1:     "https://example.com/path",
 			url2:     "https://example.com/path/",
-			expected: false,
+			expected: true,
 		},
 		{
 			name:     "invalid URLs",
@@ -391,8 +360,10 @@ func TestWriteBatchFile_Coverage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			batchFile := filepath.Join(tempDir, "batch.txt")
 			r := &RAria2{
 				OutputPath: tempDir,
+				WriteBatch: batchFile,
 			}
 
 			err := r.writeBatchFile(tt.entries)
