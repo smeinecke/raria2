@@ -21,7 +21,7 @@ vet:
 	go vet ./...
 
 $(GOLANGCI_LINT):
-	GO111MODULE=on go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+	GO111MODULE=on go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 lint: $(GOLANGCI_LINT)
 	GO111MODULE=on GOFLAGS=-mod=mod $(GOLANGCI_LINT) run --timeout=5m
