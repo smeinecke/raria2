@@ -3,36 +3,51 @@ package raria2
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/sirupsen/logrus"
+)
+
+var (
+	execCommand = exec.Command
+	lookPath    = exec.LookPath
 )
 
 type RAria2 struct {
 	url                    *url.URL
 	MaxConnectionPerServer int
 	MaxConcurrentDownload  int
+	MaxDepth               int
 	OutputPath             string
 	Aria2AfterURLArgs      []string
-
-	urlList    []string
-	httpClient *http.Client
+	HTTPTimeout            time.Duration
+	VisitedCachePath       string
+	AcceptExtensions       map[string]struct{}
+	RejectExtensions       map[string]struct{}
+	AcceptPathRegex        []*regexp.Regexp
+	RejectPathRegex        []*regexp.Regexp
+	httpClient             *http.Client
 
 	downloadEntries   []aria2URLEntry
 	downloadEntriesMu sync.Mutex
 
 	// does not perform any resource download
-	dryRun bool
+	DryRun bool
 
 	urlCache   map[string]struct{}
 	urlCacheMu sync.Mutex
@@ -43,6 +58,8 @@ func New(url *url.URL) *RAria2 {
 		url:                    url,
 		MaxConnectionPerServer: 5,
 		MaxConcurrentDownload:  5,
+		MaxDepth:               -1,
+		HTTPTimeout:            30 * time.Second,
 		urlCache:               make(map[string]struct{}),
 	}
 }
@@ -76,7 +93,12 @@ func (r *RAria2) client() *http.Client {
 		return r.httpClient
 	}
 
-	r.httpClient = http.DefaultClient
+	timeout := r.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	r.httpClient = &http.Client{Timeout: timeout}
 	return r.httpClient
 }
 
@@ -90,16 +112,16 @@ func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer res.Body.Close()
 
-	contentType := res.Header.Get("Content-Type")
-	contentTypeEntries := strings.Split(contentType, ";")
-	for _, v := range contentTypeEntries {
-		if v == "text/html" {
-			return true, nil
-		}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return false, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
 	}
-	return false, nil
+
+	return isHTMLContent(res.Header.Get("Content-Type")), nil
 }
+
+var errNotHTML = errors.New("content is not HTML")
 
 func (r *RAria2) getLinksByUrl(urlString string) ([]string, error) {
 	parsedUrl, err := url.Parse(urlString)
@@ -116,59 +138,99 @@ func (r *RAria2) getLinksByUrl(urlString string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
+	}
+
+	if !isHTMLContent(res.Header.Get("Content-Type")) {
+		return nil, errNotHTML
+	}
 
 	return getLinks(parsedUrl, res.Body)
 }
 
 func (r *RAria2) Run() error {
+	if _, err := lookPath("aria2c"); err != nil {
+		return fmt.Errorf("aria2c is required but was not found in PATH: %w", err)
+	}
+
+	if err := r.loadVisitedCache(); err != nil {
+		return fmt.Errorf("failed loading visited cache: %w", err)
+	}
+
 	if err := r.ensureOutputPath(); err != nil {
 		return err
 	}
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
-	// Fetch the first URL
-	var err error
-	r.urlList, err = r.getLinksByUrl(r.url.String())
-	if err != nil {
-		return err
-	}
 
-	logrus.Infof("queuing %d URLs for batch download", len(r.urlList))
-	for _, link := range r.urlList {
-		r.subDownloadUrls(0, link)
+	r.subDownloadUrls(0, r.url.String())
+
+	if err := r.saveVisitedCache(); err != nil {
+		return fmt.Errorf("failed saving visited cache: %w", err)
 	}
 
 	return r.executeBatchDownload()
 
 }
 
-func (r *RAria2) subDownloadUrls(workerId int, cUrl string) {
-	if !r.markVisited(cUrl) {
-		logrus.Infof("cache hit for %v. won't re-visit", cUrl)
-		return
+func (r *RAria2) subDownloadUrls(workerId int, startURL string) {
+	type crawlEntry struct {
+		url   string
+		depth int
 	}
 
-	// Fetch URLs
-	isHtml, err := r.IsHtmlPage(cUrl)
-	if err != nil {
-		logrus.Warnf("unable to get %v content type: %v", cUrl, err)
-		return
-	}
+	queue := []crawlEntry{{url: startURL, depth: 0}}
 
-	if isHtml {
+	for len(queue) > 0 {
+		entry := queue[0]
+		queue = queue[1:]
+		cUrl := entry.url
+		parsedURL, err := url.Parse(cUrl)
+		if err != nil {
+			logrus.Warnf("skipping invalid URL %s: %v", cUrl, err)
+			continue
+		}
+
+		if !r.pathAllowed(parsedURL) {
+			logrus.Debugf("path filters skipped %s", cUrl)
+			continue
+		}
+
+		if !r.markVisited(cUrl) {
+			logrus.Infof("cache hit for %v. won't re-visit", cUrl)
+			continue
+		}
+
 		newLinks, err := r.getLinksByUrl(cUrl)
 		if err != nil {
-			logrus.Errorf("error in wid %d: %v", workerId, err)
-			return
+			if errors.Is(err, errNotHTML) {
+				r.downloadResource(workerId, cUrl)
+				continue
+			}
+			logrus.Warnf("unable to fetch %v: %v", cUrl, err)
+			continue
+		}
+
+		nextDepth := entry.depth + 1
+		if r.MaxDepth >= 0 && nextDepth > r.MaxDepth {
+			continue
 		}
 
 		for _, link := range newLinks {
-			r.subDownloadUrls(workerId, link)
+			parsedLink, err := url.Parse(link)
+			if err != nil {
+				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				continue
+			}
+			if !r.pathAllowed(parsedLink) {
+				logrus.Debugf("path filters skipped %s", link)
+				continue
+			}
+			queue = append(queue, crawlEntry{url: link, depth: nextDepth})
 		}
-		return
-	} else {
-		r.downloadResource(workerId, cUrl)
-		return
 	}
 }
 
@@ -176,6 +238,16 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 	parsedCUrl, err := url.Parse(cUrl)
 	if err != nil {
 		logrus.Warnf("[W %d]: unable to download %v because it's an invalid URL: %v", workerId, cUrl, err)
+		return
+	}
+
+	if !r.pathAllowed(parsedCUrl) {
+		logrus.Debugf("[W %d]: skipping %s due to path filters", workerId, cUrl)
+		return
+	}
+
+	if !r.extensionAllowed(parsedCUrl) {
+		logrus.Debugf("[W %d]: skipping %s due to extension filters", workerId, cUrl)
 		return
 	}
 
@@ -191,7 +263,7 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 		outputPath = parsedCUrl.Host + "/" + parsedCUrl.Path
 	}
 
-	if r.dryRun {
+	if r.DryRun {
 		logrus.Infof("[W %d]: dry run: downloading %s to %s", workerId, cUrl, outputPath)
 	}
 
@@ -207,22 +279,189 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 }
 
 func (r *RAria2) markVisited(u string) bool {
+	key := canonicalCacheKey(u)
 	r.urlCacheMu.Lock()
 	defer r.urlCacheMu.Unlock()
-	if _, exists := r.urlCache[u]; exists {
+	if _, exists := r.urlCache[key]; exists {
 		return false
 	}
-	r.urlCache[u] = struct{}{}
+	r.urlCache[key] = struct{}{}
 	return true
+}
+
+func (r *RAria2) loadVisitedCache() error {
+	if r.VisitedCachePath == "" {
+		return nil
+	}
+
+	file, err := os.Open(r.VisitedCachePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var entries []string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entries = append(entries, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	r.urlCacheMu.Lock()
+	for _, entry := range entries {
+		r.urlCache[entry] = struct{}{}
+	}
+	r.urlCacheMu.Unlock()
+
+	return nil
+}
+
+func (r *RAria2) saveVisitedCache() error {
+	if r.VisitedCachePath == "" {
+		return nil
+	}
+
+	r.urlCacheMu.Lock()
+	keys := make([]string, 0, len(r.urlCache))
+	for k := range r.urlCache {
+		keys = append(keys, k)
+	}
+	r.urlCacheMu.Unlock()
+	sort.Strings(keys)
+
+	dir := filepath.Dir(r.VisitedCachePath)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+
+	tmpPath := r.VisitedCachePath + ".tmp"
+	file, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	writer := bufio.NewWriter(file)
+	for _, key := range keys {
+		if _, err := fmt.Fprintln(writer, key); err != nil {
+			file.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		file.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	return os.Rename(tmpPath, r.VisitedCachePath)
+}
+
+func canonicalCacheKey(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+
+	parsed.Fragment = ""
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+
+	if strings.HasSuffix(parsed.Path, "/") {
+		parsed.RawQuery = ""
+	}
+
+	return parsed.String()
+}
+
+func (r *RAria2) pathAllowed(u *url.URL) bool {
+	pathStr := u.Path
+	if pathStr == "" {
+		pathStr = "/"
+	}
+
+	if matchAnyRegex(r.RejectPathRegex, pathStr) {
+		return false
+	}
+
+	if len(r.AcceptPathRegex) == 0 {
+		return true
+	}
+
+	if matchAnyRegex(r.AcceptPathRegex, pathStr) {
+		return true
+	}
+
+	basePath := r.url.Path
+	if basePath == "" {
+		basePath = "/"
+	}
+	trimPath := strings.TrimSuffix(pathStr, "/")
+	trimBase := strings.TrimSuffix(basePath, "/")
+	if trimPath == "" {
+		trimPath = "/"
+	}
+	if trimBase == "" {
+		trimBase = "/"
+	}
+
+	return trimPath == trimBase
+}
+
+func (r *RAria2) extensionAllowed(u *url.URL) bool {
+	if len(r.AcceptExtensions) == 0 && len(r.RejectExtensions) == 0 {
+		return true
+	}
+
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(u.Path), "."))
+
+	if len(r.AcceptExtensions) > 0 {
+		if _, ok := r.AcceptExtensions[ext]; !ok {
+			return false
+		}
+	}
+
+	if len(r.RejectExtensions) > 0 {
+		if _, ok := r.RejectExtensions[ext]; ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+func matchAnyRegex(patterns []*regexp.Regexp, value string) bool {
+	for _, re := range patterns {
+		if re.MatchString(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RAria2) ensureOutputDir(workerId int, dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if r.dryRun {
+		if r.DryRun {
 			logrus.Infof("[W %d]: dry run: creating folder %s", workerId, dir)
 			return nil
 		}
-		if err := os.MkdirAll(dir, 0o744); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
@@ -270,7 +509,7 @@ func (r *RAria2) executeBatchDownload() error {
 	}
 	args = append(args, "--input-file", "-", "--deferred-input=true")
 
-	if r.dryRun {
+	if r.DryRun {
 		args = append(args, "--dry-run=true")
 	}
 
@@ -278,12 +517,12 @@ func (r *RAria2) executeBatchDownload() error {
 		args = append(args, r.Aria2AfterURLArgs...)
 	}
 
-	if r.dryRun {
+	if r.DryRun {
 		logrus.Infof("aria2 batch cmd: %s %s", binFile, strings.Join(args, " "))
 		return nil
 	}
 
-	cmd := exec.Command(binFile, args...)
+	cmd := execCommand(binFile, args...)
 	cmd.Stdin = bytes.NewReader(buf.Bytes())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -298,18 +537,6 @@ func (r *RAria2) executeBatchDownload() error {
 type aria2URLEntry struct {
 	URL string
 	Dir string
-}
-
-func intMin(a int, b int) int {
-	if a < b {
-		return a
-	}
-
-	if a > b {
-		return b
-	}
-
-	return a
 }
 
 func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
@@ -345,6 +572,16 @@ func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 	return urlList, nil
 }
 
+func isHTMLContent(contentType string) bool {
+	contentTypeEntries := strings.Split(contentType, ";")
+	for _, v := range contentTypeEntries {
+		if strings.TrimSpace(v) == "text/html" {
+			return true
+		}
+	}
+	return false
+}
+
 func IsSubPath(subject *url.URL, of *url.URL) bool {
 	if subject.Host != of.Host {
 		return false
@@ -354,7 +591,26 @@ func IsSubPath(subject *url.URL, of *url.URL) bool {
 		return false
 	}
 
-	return strings.HasPrefix(subject.Path, of.Path)
+	basePath := of.Path
+	if basePath == "" {
+		basePath = "/"
+	}
+
+	baseNoSlash := basePath
+	if baseNoSlash != "/" {
+		baseNoSlash = strings.TrimSuffix(baseNoSlash, "/")
+	}
+
+	baseWithSlash := baseNoSlash
+	if baseWithSlash != "/" {
+		baseWithSlash = baseNoSlash + "/"
+	}
+
+	if subject.Path == baseNoSlash {
+		return true
+	}
+
+	return strings.HasPrefix(subject.Path, baseWithSlash)
 }
 
 // An URL is considered to be the same in our context
