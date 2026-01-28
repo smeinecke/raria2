@@ -167,6 +167,21 @@ func TestCanonicalURL(t *testing.T) {
 			input:    "",
 			expected: "/",
 		},
+		{
+			name:     "directory listing with sorting params",
+			input:    "https://example.com/dir/?C=M;O=A",
+			expected: "https://example.com/dir",
+		},
+		{
+			name:     "directory with trailing slash and query",
+			input:    "https://example.com/dir/?param=value",
+			expected: "https://example.com/dir",
+		},
+		{
+			name:     "root directory with query",
+			input:    "https://example.com/?C=M;O=A",
+			expected: "https://example.com/",
+		},
 	}
 
 	for _, tt := range tests {
