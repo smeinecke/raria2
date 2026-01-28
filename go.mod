@@ -1,6 +1,6 @@
 module github.com/denysvitali/raria2
 
-go 1.25.5
+go 1.24.11
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
