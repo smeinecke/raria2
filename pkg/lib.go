@@ -3,9 +3,11 @@ package raria2
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -36,15 +39,26 @@ type RAria2 struct {
 	OutputPath             string
 	Aria2AfterURLArgs      []string
 	HTTPTimeout            time.Duration
+	UserAgent              string
+	RateLimit              float64
 	VisitedCachePath       string
 	AcceptExtensions       map[string]struct{}
 	RejectExtensions       map[string]struct{}
+	AcceptFilenames        map[string]*regexp.Regexp
+	RejectFilenames        map[string]*regexp.Regexp
+	CaseInsensitivePaths   bool
 	AcceptPathRegex        []*regexp.Regexp
 	RejectPathRegex        []*regexp.Regexp
+	WriteBatch             string
 	httpClient             *http.Client
 
 	downloadEntries   []aria2URLEntry
 	downloadEntriesMu sync.Mutex
+
+	lastRequest int64 // Unix timestamp with nanoseconds
+
+	// Disable retries (useful for testing)
+	DisableRetries bool
 
 	// does not perform any resource download
 	DryRun bool
@@ -102,17 +116,151 @@ func (r *RAria2) client() *http.Client {
 	return r.httpClient
 }
 
+func (r *RAria2) waitForRateLimit() {
+	if r.RateLimit <= 0 {
+		return
+	}
+
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&r.lastRequest)
+
+	// Calculate minimum time between requests
+	minInterval := time.Second / time.Duration(r.RateLimit)
+
+	if now-last < int64(minInterval) {
+		sleepTime := time.Duration(minInterval - time.Duration(now-last))
+		time.Sleep(sleepTime)
+	}
+
+	atomic.StoreInt64(&r.lastRequest, time.Now().UnixNano())
+}
+
+func (r *RAria2) doHTTPRequestWithRetry(req *http.Request) (*http.Response, error) {
+	// If retries are disabled, just do a single request
+	if r.DisableRetries {
+		r.waitForRateLimit()
+		return r.client().Do(req)
+	}
+
+	const maxRetries = 3
+	const baseDelay = 100 * time.Millisecond
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff with jitter
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			jitter := time.Duration(float64(delay) * 0.1 * (0.5 + 0.5*rand.Float64()))
+			time.Sleep(delay + jitter)
+
+			logrus.Debugf("Retrying HTTP request (attempt %d/%d)", attempt+1, maxRetries)
+		}
+
+		r.waitForRateLimit()
+
+		resp, err := r.client().Do(req)
+		if err == nil {
+			// Check for transient HTTP errors
+			if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+				lastErr = fmt.Errorf("HTTP %d: transient error", resp.StatusCode)
+				resp.Body.Close()
+				continue
+			}
+			return resp, nil
+		}
+
+		// Check if error is transient (network-related)
+		if isTransientError(err) {
+			lastErr = err
+			continue
+		}
+
+		// Non-transient error, return immediately
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func isTransientError(err error) bool {
+	errStr := err.Error()
+
+	// Common transient error patterns
+	transientPatterns := []string{
+		"connection refused",
+		"connection reset",
+		"connection timed out",
+		"timeout",
+		"network is unreachable",
+		"temporary failure",
+		"service unavailable",
+		"bad gateway",
+		"gateway timeout",
+	}
+
+	for _, pattern := range transientPatterns {
+		if strings.Contains(strings.ToLower(errStr), pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
+	// First try HEAD request
 	req, err := http.NewRequest("HEAD", urlString, nil)
 	if err != nil {
 		return false, err
 	}
+	req.Header.Set("User-Agent", r.UserAgent)
 
-	res, err := r.client().Do(req)
+	res, err := r.doHTTPRequestWithRetry(req)
 	if err != nil {
 		return false, err
 	}
 	defer res.Body.Close()
+
+	// If HEAD fails with 405/403 or missing Content-Type, fall back to GET
+	if res.StatusCode == 405 || res.StatusCode == 403 ||
+		res.Header.Get("Content-Type") == "" {
+
+		// Try GET with Range header first for efficiency
+		req, err = http.NewRequest("GET", urlString, nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("User-Agent", r.UserAgent)
+		req.Header.Set("Range", "bytes=0-1023")
+		res, err = r.doHTTPRequestWithRetry(req)
+		if err != nil {
+			return false, err
+		}
+		defer res.Body.Close()
+
+		// If Range not supported, read first 1KB normally
+		if res.StatusCode == 416 || res.StatusCode == 400 {
+			req, err = http.NewRequest("GET", urlString, nil)
+			if err != nil {
+				return false, err
+			}
+			req.Header.Set("User-Agent", r.UserAgent)
+			res, err = r.doHTTPRequestWithRetry(req)
+			if err != nil {
+				return false, err
+			}
+			defer res.Body.Close()
+		}
+
+		// For successful GET (either Range or full), read first 1KB to detect content type
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			limitReader := io.LimitReader(res.Body, 1024)
+			bodyBytes, _ := io.ReadAll(limitReader)
+			contentType := http.DetectContentType(bodyBytes)
+			return isHTMLContent(contentType), nil
+		}
+	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return false, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
@@ -124,17 +272,22 @@ func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
 var errNotHTML = errors.New("content is not HTML")
 
 func (r *RAria2) getLinksByUrl(urlString string) ([]string, error) {
+	return r.getLinksByUrlWithContext(context.Background(), urlString)
+}
+
+func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string) ([]string, error) {
 	parsedUrl, err := url.Parse(urlString)
 	if err != nil {
 		return []string{}, err
 	}
 
-	req, err := http.NewRequest("GET", urlString, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", urlString, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", r.UserAgent)
 
-	res, err := r.client().Do(req)
+	res, err := r.doHTTPRequestWithRetry(req)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +305,10 @@ func (r *RAria2) getLinksByUrl(urlString string) ([]string, error) {
 }
 
 func (r *RAria2) Run() error {
+	return r.RunWithContext(context.Background())
+}
+
+func (r *RAria2) RunWithContext(ctx context.Context) error {
 	if _, err := lookPath("aria2c"); err != nil {
 		return fmt.Errorf("aria2c is required but was not found in PATH: %w", err)
 	}
@@ -166,17 +323,16 @@ func (r *RAria2) Run() error {
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
 
-	r.subDownloadUrls(0, r.url.String())
+	r.subDownloadUrls(ctx, 0, r.url.String())
 
 	if err := r.saveVisitedCache(); err != nil {
 		return fmt.Errorf("failed saving visited cache: %w", err)
 	}
 
 	return r.executeBatchDownload()
-
 }
 
-func (r *RAria2) subDownloadUrls(workerId int, startURL string) {
+func (r *RAria2) subDownloadUrls(ctx context.Context, workerId int, startURL string) {
 	type crawlEntry struct {
 		url   string
 		depth int
@@ -185,6 +341,14 @@ func (r *RAria2) subDownloadUrls(workerId int, startURL string) {
 	queue := []crawlEntry{{url: startURL, depth: 0}}
 
 	for len(queue) > 0 {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			logrus.Info("Crawling cancelled by context")
+			return
+		default:
+		}
+
 		entry := queue[0]
 		queue = queue[1:]
 		cUrl := entry.url
@@ -200,11 +364,11 @@ func (r *RAria2) subDownloadUrls(workerId int, startURL string) {
 		}
 
 		if !r.markVisited(cUrl) {
-			logrus.Infof("cache hit for %v. won't re-visit", cUrl)
+			logrus.WithField("url", cUrl).Debug("skipping already visited")
 			continue
 		}
 
-		newLinks, err := r.getLinksByUrl(cUrl)
+		newLinks, err := r.getLinksByUrlWithContext(ctx, cUrl)
 		if err != nil {
 			if errors.Is(err, errNotHTML) {
 				r.downloadResource(workerId, cUrl)
@@ -248,6 +412,11 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 
 	if !r.extensionAllowed(parsedCUrl) {
 		logrus.Debugf("[W %d]: skipping %s due to extension filters", workerId, cUrl)
+		return
+	}
+
+	if !r.filenameAllowed(parsedCUrl) {
+		logrus.Debugf("[W %d]: skipping %s due to filename filters", workerId, cUrl)
 		return
 	}
 
@@ -318,7 +487,7 @@ func (r *RAria2) loadVisitedCache() error {
 
 	r.urlCacheMu.Lock()
 	for _, entry := range entries {
-		r.urlCache[entry] = struct{}{}
+		r.urlCache[canonicalCacheKey(entry)] = struct{}{}
 	}
 	r.urlCacheMu.Unlock()
 
@@ -372,22 +541,56 @@ func (r *RAria2) saveVisitedCache() error {
 	return os.Rename(tmpPath, r.VisitedCachePath)
 }
 
-func canonicalCacheKey(raw string) string {
+// canonicalURL returns a normalized version of a URL for consistent comparison
+// This function should be used everywhere URL comparison is needed
+func canonicalURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
 	}
 
-	parsed.Fragment = ""
-	if parsed.Path == "" {
-		parsed.Path = "/"
+	// Normalize scheme to lowercase
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+
+	// Normalize host to lowercase
+	if parsed.Host != "" {
+		parsed.Host = strings.ToLower(parsed.Host)
+
+		// Normalize default ports
+		switch parsed.Scheme {
+		case "http":
+			if parsed.Port() == "80" {
+				parsed.Host = parsed.Hostname()
+			}
+		case "https":
+			if parsed.Port() == "443" {
+				parsed.Host = parsed.Hostname()
+			}
+		}
 	}
 
-	if strings.HasSuffix(parsed.Path, "/") {
+	// Always strip fragments
+	parsed.Fragment = ""
+
+	// Normalize path - but preserve root path
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	} else if parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/") {
+		// Remove trailing slashes for consistency (except root)
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	}
+
+	// For directory-style paths (ending with /) or root paths with query params,
+	// clear query params (handles server directory listing sorting parameters)
+	if strings.HasSuffix(raw, "/") || (parsed.Path == "/" && parsed.RawQuery != "") {
 		parsed.RawQuery = ""
 	}
 
 	return parsed.String()
+}
+
+func canonicalCacheKey(raw string) string {
+	return canonicalURL(raw)
 }
 
 func (r *RAria2) pathAllowed(u *url.URL) bool {
@@ -396,15 +599,47 @@ func (r *RAria2) pathAllowed(u *url.URL) bool {
 		pathStr = "/"
 	}
 
-	if matchAnyRegex(r.RejectPathRegex, pathStr) {
+	// Apply case-insensitive matching if enabled
+	if r.CaseInsensitivePaths {
+		pathStr = strings.ToLower(pathStr)
+	}
+
+	// For case-insensitive matching, we need to use case-insensitive regex patterns
+	var rejectPatterns []*regexp.Regexp
+	var acceptPatterns []*regexp.Regexp
+
+	if r.CaseInsensitivePaths {
+		// Convert all patterns to case-insensitive
+		for _, re := range r.RejectPathRegex {
+			caseInsensitiveRe, err := regexp.Compile("(?i)" + re.String())
+			if err == nil {
+				rejectPatterns = append(rejectPatterns, caseInsensitiveRe)
+			} else {
+				rejectPatterns = append(rejectPatterns, re) // fallback
+			}
+		}
+		for _, re := range r.AcceptPathRegex {
+			caseInsensitiveRe, err := regexp.Compile("(?i)" + re.String())
+			if err == nil {
+				acceptPatterns = append(acceptPatterns, caseInsensitiveRe)
+			} else {
+				acceptPatterns = append(acceptPatterns, re) // fallback
+			}
+		}
+	} else {
+		rejectPatterns = r.RejectPathRegex
+		acceptPatterns = r.AcceptPathRegex
+	}
+
+	if matchAnyRegex(rejectPatterns, pathStr) {
 		return false
 	}
 
-	if len(r.AcceptPathRegex) == 0 {
+	if len(acceptPatterns) == 0 {
 		return true
 	}
 
-	if matchAnyRegex(r.AcceptPathRegex, pathStr) {
+	if matchAnyRegex(acceptPatterns, pathStr) {
 		return true
 	}
 
@@ -412,6 +647,12 @@ func (r *RAria2) pathAllowed(u *url.URL) bool {
 	if basePath == "" {
 		basePath = "/"
 	}
+
+	// Apply case-insensitive matching to base path if enabled
+	if r.CaseInsensitivePaths {
+		basePath = strings.ToLower(basePath)
+	}
+
 	trimPath := strings.TrimSuffix(pathStr, "/")
 	trimBase := strings.TrimSuffix(basePath, "/")
 	if trimPath == "" {
@@ -440,6 +681,37 @@ func (r *RAria2) extensionAllowed(u *url.URL) bool {
 	if len(r.RejectExtensions) > 0 {
 		if _, ok := r.RejectExtensions[ext]; ok {
 			return false
+		}
+	}
+
+	return true
+}
+
+func (r *RAria2) filenameAllowed(u *url.URL) bool {
+	if len(r.AcceptFilenames) == 0 && len(r.RejectFilenames) == 0 {
+		return true
+	}
+
+	filename := path.Base(u.Path)
+
+	if len(r.AcceptFilenames) > 0 {
+		accepted := false
+		for _, pattern := range r.AcceptFilenames {
+			if pattern.MatchString(filename) {
+				accepted = true
+				break
+			}
+		}
+		if !accepted {
+			return false
+		}
+	}
+
+	if len(r.RejectFilenames) > 0 {
+		for _, pattern := range r.RejectFilenames {
+			if pattern.MatchString(filename) {
+				return false
+			}
 		}
 	}
 
@@ -502,6 +774,11 @@ func (r *RAria2) executeBatchDownload() error {
 		return err
 	}
 
+	// If WriteBatch is set, write to file instead of executing aria2c
+	if r.WriteBatch != "" {
+		return r.writeBatchFile(buf.Bytes())
+	}
+
 	binFile := "aria2c"
 	args := []string{"-x", strconv.Itoa(r.MaxConnectionPerServer)}
 	if r.MaxConcurrentDownload > 0 {
@@ -534,6 +811,24 @@ func (r *RAria2) executeBatchDownload() error {
 	return nil
 }
 
+func (r *RAria2) writeBatchFile(content []byte) error {
+	// Create the file
+	file, err := os.Create(r.WriteBatch)
+	if err != nil {
+		return fmt.Errorf("failed to create batch file %s: %w", r.WriteBatch, err)
+	}
+	defer file.Close()
+
+	// Write the content
+	if _, err := file.Write(content); err != nil {
+		return fmt.Errorf("failed to write batch file %s: %w", r.WriteBatch, err)
+	}
+
+	logrus.Infof("wrote aria2 batch file with %d download entries to %s",
+		len(r.downloadEntries), r.WriteBatch)
+	return nil
+}
+
 type aria2URLEntry struct {
 	URL string
 	Dir string
@@ -541,12 +836,11 @@ type aria2URLEntry struct {
 
 func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 	document, err := goquery.NewDocumentFromReader(body)
+	if err != nil {
+		return []string{}, err
+	}
 
 	var urlList []string
-
-	if err != nil {
-		return urlList, err
-	}
 
 	document.Find("a[href]").Each(func(i int, selection *goquery.Selection) {
 		val, exists := selection.Attr("href")
@@ -559,13 +853,15 @@ func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 			logrus.Infof("skipping %v because it is not a valid URL", val)
 			return
 		}
-		resolvedRefUrl := originalUrl.ResolveReference(aHrefUrl)
-		if SameUrl(resolvedRefUrl, originalUrl) {
+
+		resolvedUrl := originalUrl.ResolveReference(aHrefUrl)
+
+		if SameUrl(resolvedUrl, originalUrl) {
 			return
 		}
 
-		if IsSubPath(resolvedRefUrl, originalUrl) {
-			urlList = append(urlList, resolvedRefUrl.String())
+		if IsSubPath(resolvedUrl, originalUrl) {
+			urlList = append(urlList, resolvedUrl.String())
 		}
 	})
 
@@ -583,15 +879,22 @@ func isHTMLContent(contentType string) bool {
 }
 
 func IsSubPath(subject *url.URL, of *url.URL) bool {
-	if subject.Host != of.Host {
+	// Use canonical URLs for consistent comparison
+	subjectCanonical := canonicalURL(subject.String())
+	ofCanonical := canonicalURL(of.String())
+
+	subjectParsed, _ := url.Parse(subjectCanonical)
+	ofParsed, _ := url.Parse(ofCanonical)
+
+	if subjectParsed.Host != ofParsed.Host {
 		return false
 	}
 
-	if subject.Scheme != of.Scheme {
+	if subjectParsed.Scheme != ofParsed.Scheme {
 		return false
 	}
 
-	basePath := of.Path
+	basePath := ofParsed.Path
 	if basePath == "" {
 		basePath = "/"
 	}
@@ -602,32 +905,18 @@ func IsSubPath(subject *url.URL, of *url.URL) bool {
 	}
 
 	baseWithSlash := baseNoSlash
-	if baseWithSlash != "/" {
+	if baseNoSlash != "/" {
 		baseWithSlash = baseNoSlash + "/"
 	}
 
-	if subject.Path == baseNoSlash {
+	if subjectParsed.Path == baseNoSlash {
 		return true
 	}
 
-	return strings.HasPrefix(subject.Path, baseWithSlash)
+	return strings.HasPrefix(subjectParsed.Path, baseWithSlash)
 }
 
-// An URL is considered to be the same in our context
-// when they share the same hostname and path.
-// In our case, /, /?C=N;O=D, /?C=M;O=A, ... are all considered to be the same URL.
+// SameUrl checks if two URLs are considered the same using canonicalization
 func SameUrl(a *url.URL, b *url.URL) bool {
-	if a.Host != b.Host {
-		return false
-	}
-
-	if a.Path != b.Path {
-		return false
-	}
-
-	if a.Port() != b.Port() {
-		return false
-	}
-
-	return true
+	return canonicalURL(a.String()) == canonicalURL(b.String())
 }

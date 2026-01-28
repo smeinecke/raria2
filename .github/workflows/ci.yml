@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "master" ]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -22,35 +26,10 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Verify formatting
-        run: make fmt-check
+      - name: Run CI
+        run: make ci
+        if: matrix.go-version == '1.24.x'
 
-      - name: Run go vet
-        run: make vet
-
-      - name: Run golangci-lint
-        run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          golangci-lint run --timeout=5m
-
-      - name: Run tests
+      - name: Run tests (compatibility check)
         run: make test
-
-      - name: Run govulncheck
-        if: matrix.go-version == '1.24.x'
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
-
-      - name: Ensure go.mod is tidy
-        if: matrix.go-version == '1.24.x'
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-
-      - name: Upload coverage artifact (latest Go only)
-        if: matrix.go-version == '1.24.x'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage.out
+        if: matrix.go-version == '1.25.x'

@@ -45,6 +45,47 @@ func TestPathAllowedAcceptAndReject(t *testing.T) {
 	assert.False(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/files/data.tmp")))
 }
 
+func TestFilenameAllowedAcceptAndReject(t *testing.T) {
+	base := mustParseURL(t, "https://example.com/root/")
+	r := &RAria2{url: base}
+
+	// Test accept filename glob
+	pattern := regexp.MustCompile(`^file.*\.bin$`)
+	r.AcceptFilenames = map[string]*regexp.Regexp{
+		"file*.bin": pattern,
+	}
+	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/file1.bin")))
+	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/file123.bin")))
+	assert.False(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/other.bin")))
+
+	// Test reject filename glob
+	r.AcceptFilenames = nil
+	pattern = regexp.MustCompile(`^.*\.tmp$`)
+	r.RejectFilenames = map[string]*regexp.Regexp{
+		"*.tmp": pattern,
+	}
+	assert.False(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/data.tmp")))
+	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/data.bin")))
+}
+
+func TestCaseInsensitivePaths(t *testing.T) {
+	base := mustParseURL(t, "https://example.com/root/")
+	r := &RAria2{url: base, CaseInsensitivePaths: true}
+
+	// Test case-insensitive path matching
+	pattern := regexp.MustCompile(`^/root/files/.*`)
+	r.AcceptPathRegex = []*regexp.Regexp{pattern}
+	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/FILES/data.bin")))
+	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/files/data.bin")))
+
+	// Test case-insensitive reject
+	r.AcceptPathRegex = nil
+	pattern = regexp.MustCompile(`^/root/temp/.*`)
+	r.RejectPathRegex = []*regexp.Regexp{pattern}
+	assert.False(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/TEMP/data.bin")))
+	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/other/data.bin")))
+}
+
 func TestExtensionAllowedAcceptAndReject(t *testing.T) {
 	base := mustParseURL(t, "https://example.com/root/")
 	r := &RAria2{url: base, AcceptExtensions: map[string]struct{}{"bin": {}, "iso": {}}}
@@ -127,9 +168,8 @@ func TestRun_PathFilters(t *testing.T) {
 
 	baseURL, err := url.Parse(ts.URL + "/")
 	assert.Nil(t, err)
-	client := New(baseURL)
+	client := newTestClient(baseURL)
 	client.OutputPath = tempDir(t)
-	client.DryRun = true
 	client.AcceptPathRegex = []*regexp.Regexp{regexp.MustCompile(`^/files/`)}
 
 	err = client.Run()
@@ -204,8 +244,7 @@ func TestGetLinksByUrlFetchesRemoteLinks(t *testing.T) {
 	ts := newFixtureServer()
 	t.Cleanup(ts.Close)
 	base, _ := url.Parse(ts.URL + "/")
-	r := New(base)
-	r.DryRun = true
+	r := newTestClient(base)
 
 	links, err := r.getLinksByUrl(ts.URL + "/")
 	assert.NoError(t, err)
@@ -261,11 +300,8 @@ func TestRun_FromNestedPath(t *testing.T) {
 func TestIsHtmlPage_DistinguishesHtml(t *testing.T) {
 	ts := newFixtureServer()
 	t.Cleanup(ts.Close)
-
-	baseUrl, err := url.Parse(ts.URL + "/")
-	assert.Nil(t, err)
-	client := New(baseUrl)
-	client.DryRun = true
+	base, _ := url.Parse(ts.URL + "/")
+	client := newTestClient(base)
 
 	isHtmlPage, err := client.IsHtmlPage(ts.URL + "/")
 	assert.Nil(t, err)
@@ -490,6 +526,7 @@ func TestVisitedCachePersistence(t *testing.T) {
 
 	r := &RAria2{urlCache: make(map[string]struct{}), VisitedCachePath: cacheFile}
 	assert.NoError(t, r.loadVisitedCache())
+
 	assert.False(t, r.markVisited(initial[0]))
 	assert.False(t, r.markVisited(initial[1]))
 	assert.True(t, r.markVisited("https://example.com/root/new.bin"))
@@ -527,6 +564,27 @@ func readVisitedCache(t *testing.T, path string) []string {
 	return lines
 }
 
+func TestWriteBatch(t *testing.T) {
+	tmp := tempDir(t)
+	r := &RAria2{
+		downloadEntries: []aria2URLEntry{
+			{URL: "https://example.com/file1.bin", Dir: "downloads"},
+			{URL: "https://example.com/file2.bin", Dir: ""},
+		},
+		WriteBatch: filepath.Join(tmp, "batch.txt"),
+	}
+
+	err := r.executeBatchDownload()
+	assert.NoError(t, err)
+
+	// Check that the file was created and contains the expected content
+	content, err := os.ReadFile(r.WriteBatch)
+	assert.NoError(t, err)
+
+	expected := "https://example.com/file1.bin\n  dir=downloads\nhttps://example.com/file2.bin\n"
+	assert.Equal(t, expected, string(content))
+}
+
 func TestExecuteBatchDownloadDryRun(t *testing.T) {
 	r := &RAria2{
 		DryRun:                 true,
@@ -553,6 +611,14 @@ func TestIsSubPath(t *testing.T) {
 
 	outside := mustParseURL(t, "https://example.com/other")
 	assert.False(t, IsSubPath(outside, of))
+}
+
+func newTestClient(baseURL *url.URL) *RAria2 {
+	r := New(baseURL)
+	r.DryRun = true
+	r.DisableRetries = true
+	r.RateLimit = 0 // Disable rate limiting for tests
+	return r
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
