@@ -7,6 +7,7 @@ require (
 	github.com/alexflint/go-arg v1.5.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
+	github.com/temoto/robotstxt v1.1.2
 )
 
 require (

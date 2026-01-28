@@ -24,6 +24,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/sirupsen/logrus"
+	"github.com/temoto/robotstxt"
 )
 
 var (
@@ -49,7 +50,12 @@ type RAria2 struct {
 	CaseInsensitivePaths   bool
 	AcceptPathRegex        []*regexp.Regexp
 	RejectPathRegex        []*regexp.Regexp
+	ciRegexCache           map[*regexp.Regexp]*regexp.Regexp
+	ciRegexCacheMu         sync.RWMutex
 	WriteBatch             string
+	RespectRobots          bool
+	AcceptMime             map[string]struct{}
+	RejectMime             map[string]struct{}
 	httpClient             *http.Client
 
 	downloadEntries   []aria2URLEntry
@@ -65,6 +71,10 @@ type RAria2 struct {
 
 	urlCache   map[string]struct{}
 	urlCacheMu sync.Mutex
+
+	// robots.txt cache per host
+	robotsCache   map[string]*robotstxt.RobotsData
+	robotsCacheMu sync.RWMutex
 }
 
 func New(url *url.URL) *RAria2 {
@@ -281,7 +291,8 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		return []string{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlString, nil)
+	// First try HEAD request to check if it's HTML
+	req, err := http.NewRequestWithContext(ctx, "HEAD", urlString, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +302,7 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
@@ -299,6 +310,23 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 
 	if !isHTMLContent(res.Header.Get("Content-Type")) {
 		return nil, errNotHTML
+	}
+
+	// It's HTML, so do a full GET to parse links
+	req, err = http.NewRequestWithContext(ctx, "GET", urlString, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", r.UserAgent)
+
+	res, err = r.doHTTPRequestWithRetry(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
 	}
 
 	return getLinks(parsedUrl, res.Body)
@@ -363,6 +391,11 @@ func (r *RAria2) subDownloadUrls(ctx context.Context, workerId int, startURL str
 			continue
 		}
 
+		if r.RespectRobots && !r.urlAllowedByRobots(parsedURL) {
+			logrus.Debugf("robots.txt disallowed %s", cUrl)
+			continue
+		}
+
 		if !r.markVisited(cUrl) {
 			logrus.WithField("url", cUrl).Debug("skipping already visited")
 			continue
@@ -420,6 +453,28 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 		return
 	}
 
+	// Check MIME type filtering - need to fetch headers first
+	req, err := http.NewRequest("HEAD", cUrl, nil)
+	if err != nil {
+		logrus.Warnf("[W %d]: unable to create HEAD request for %s: %v", workerId, cUrl, err)
+		return
+	}
+	req.Header.Set("User-Agent", r.UserAgent)
+
+	res, err := r.doHTTPRequestWithRetry(req)
+	if err != nil {
+		logrus.Warnf("[W %d]: unable to fetch headers for %s: %v", workerId, cUrl, err)
+		return
+	}
+	res.Body.Close()
+
+	// Check MIME type filtering
+	contentType := res.Header.Get("Content-Type")
+	if !r.mimeAllowed(contentType) {
+		logrus.Debugf("[W %d]: skipping %s due to MIME filter: %s", workerId, cUrl, contentType)
+		return
+	}
+
 	// Get relative directory
 	var outputPath string
 	p1 := parsedCUrl.Path
@@ -431,6 +486,9 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 	} else {
 		outputPath = parsedCUrl.Host + "/" + parsedCUrl.Path
 	}
+
+	// Safety: ensure outputPath doesn't start with "/" to prevent path traversal
+	outputPath = strings.TrimPrefix(outputPath, "/")
 
 	if r.DryRun {
 		logrus.Infof("[W %d]: dry run: downloading %s to %s", workerId, cUrl, outputPath)
@@ -549,6 +607,11 @@ func canonicalURL(raw string) string {
 		return raw
 	}
 
+	// Preserve whether the original URL looked like a directory (trailing slash in the *path*).
+	// Important for URLs like: https://host/dir/?C=M;O=A
+	// where raw does not end with '/', but the path does.
+	hadTrailingSlash := parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/")
+
 	// Normalize scheme to lowercase
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 
@@ -580,9 +643,9 @@ func canonicalURL(raw string) string {
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
 	}
 
-	// For directory-style paths (ending with /) or root paths with query params,
-	// clear query params (handles server directory listing sorting parameters)
-	if strings.HasSuffix(raw, "/") || (parsed.Path == "/" && parsed.RawQuery != "") {
+	// For directory-style paths (ending with / in the original path) or root paths with query params,
+	// clear query params (handles server directory listing sorting parameters).
+	if hadTrailingSlash || (parsed.Path == "/" && parsed.RawQuery != "") {
 		parsed.RawQuery = ""
 	}
 
@@ -604,28 +667,12 @@ func (r *RAria2) pathAllowed(u *url.URL) bool {
 		pathStr = strings.ToLower(pathStr)
 	}
 
-	// For case-insensitive matching, we need to use case-insensitive regex patterns
 	var rejectPatterns []*regexp.Regexp
 	var acceptPatterns []*regexp.Regexp
 
 	if r.CaseInsensitivePaths {
-		// Convert all patterns to case-insensitive
-		for _, re := range r.RejectPathRegex {
-			caseInsensitiveRe, err := regexp.Compile("(?i)" + re.String())
-			if err == nil {
-				rejectPatterns = append(rejectPatterns, caseInsensitiveRe)
-			} else {
-				rejectPatterns = append(rejectPatterns, re) // fallback
-			}
-		}
-		for _, re := range r.AcceptPathRegex {
-			caseInsensitiveRe, err := regexp.Compile("(?i)" + re.String())
-			if err == nil {
-				acceptPatterns = append(acceptPatterns, caseInsensitiveRe)
-			} else {
-				acceptPatterns = append(acceptPatterns, re) // fallback
-			}
-		}
+		rejectPatterns = r.caseInsensitivePatterns(r.RejectPathRegex)
+		acceptPatterns = r.caseInsensitivePatterns(r.AcceptPathRegex)
 	} else {
 		rejectPatterns = r.RejectPathRegex
 		acceptPatterns = r.AcceptPathRegex
@@ -665,6 +712,47 @@ func (r *RAria2) pathAllowed(u *url.URL) bool {
 	return trimPath == trimBase
 }
 
+func (r *RAria2) caseInsensitivePatterns(patterns []*regexp.Regexp) []*regexp.Regexp {
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	result := make([]*regexp.Regexp, 0, len(patterns))
+	for _, re := range patterns {
+		if re == nil {
+			continue
+		}
+		result = append(result, r.caseInsensitiveRegex(re))
+	}
+
+	return result
+}
+
+func (r *RAria2) caseInsensitiveRegex(re *regexp.Regexp) *regexp.Regexp {
+	r.ciRegexCacheMu.RLock()
+	if r.ciRegexCache != nil {
+		if cached, ok := r.ciRegexCache[re]; ok {
+			r.ciRegexCacheMu.RUnlock()
+			return cached
+		}
+	}
+	r.ciRegexCacheMu.RUnlock()
+
+	ciRe, err := regexp.Compile("(?i)" + re.String())
+	if err != nil {
+		return re
+	}
+
+	r.ciRegexCacheMu.Lock()
+	if r.ciRegexCache == nil {
+		r.ciRegexCache = make(map[*regexp.Regexp]*regexp.Regexp)
+	}
+	r.ciRegexCache[re] = ciRe
+	r.ciRegexCacheMu.Unlock()
+
+	return ciRe
+}
+
 func (r *RAria2) extensionAllowed(u *url.URL) bool {
 	if len(r.AcceptExtensions) == 0 && len(r.RejectExtensions) == 0 {
 		return true
@@ -685,6 +773,84 @@ func (r *RAria2) extensionAllowed(u *url.URL) bool {
 	}
 
 	return true
+}
+
+func (r *RAria2) urlAllowedByRobots(u *url.URL) bool {
+	if !r.RespectRobots {
+		return true
+	}
+
+	robots, err := r.getRobotsData(u.Host)
+	if err != nil {
+		logrus.Debugf("failed to fetch robots.txt for %s: %v", u.Host, err)
+		return true // fail open
+	}
+
+	// Check if URL is allowed for our user agent
+	return robots.TestAgent(u.Path, r.UserAgent)
+}
+
+func (r *RAria2) getRobotsData(host string) (*robotstxt.RobotsData, error) {
+	r.robotsCacheMu.RLock()
+	if r.robotsCache != nil {
+		if cached, ok := r.robotsCache[host]; ok {
+			r.robotsCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	r.robotsCacheMu.RUnlock()
+
+	// Fetch robots.txt - try HTTP first, then HTTPS if needed
+	robotsURL := fmt.Sprintf("http://%s/robots.txt", host)
+	req, err := http.NewRequest("GET", robotsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", r.UserAgent)
+
+	resp, err := r.doHTTPRequestWithRetry(req)
+	if err != nil {
+		// Try HTTPS if HTTP fails
+		robotsURL = fmt.Sprintf("https://%s/robots.txt", host)
+		req, err = http.NewRequest("GET", robotsURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", r.UserAgent)
+
+		resp, err = r.doHTTPRequestWithRetry(req)
+		if err != nil {
+			// No robots.txt or error fetching it
+			robotsData := robotstxt.RobotsData{}
+			r.cacheRobotsData(host, &robotsData)
+			return &robotsData, nil
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		// No robots.txt or error fetching it
+		robotsData := robotstxt.RobotsData{}
+		r.cacheRobotsData(host, &robotsData)
+		return &robotsData, nil
+	}
+
+	robotsData, err := robotstxt.FromResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	r.cacheRobotsData(host, robotsData)
+	return robotsData, nil
+}
+
+func (r *RAria2) cacheRobotsData(host string, data *robotstxt.RobotsData) {
+	r.robotsCacheMu.Lock()
+	if r.robotsCache == nil {
+		r.robotsCache = make(map[string]*robotstxt.RobotsData)
+	}
+	r.robotsCache[host] = data
+	r.robotsCacheMu.Unlock()
 }
 
 func (r *RAria2) filenameAllowed(u *url.URL) bool {
@@ -712,6 +878,32 @@ func (r *RAria2) filenameAllowed(u *url.URL) bool {
 			if pattern.MatchString(filename) {
 				return false
 			}
+		}
+	}
+
+	return true
+}
+
+func (r *RAria2) mimeAllowed(contentType string) bool {
+	if len(r.AcceptMime) == 0 && len(r.RejectMime) == 0 {
+		return true
+	}
+
+	// Normalize content type (lowercase, remove parameters like charset)
+	mimeType := strings.ToLower(strings.Split(contentType, ";")[0])
+	mimeType = strings.TrimSpace(mimeType)
+
+	// If reject filter has the MIME type, reject it first
+	if len(r.RejectMime) > 0 {
+		if _, ok := r.RejectMime[mimeType]; ok {
+			return false
+		}
+	}
+
+	// If accept filter is specified, only allow those MIME types
+	if len(r.AcceptMime) > 0 {
+		if _, ok := r.AcceptMime[mimeType]; !ok {
+			return false
 		}
 	}
 

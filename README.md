@@ -45,6 +45,9 @@ Options:
                          HTTP client timeout as Go duration string (e.g. 30s, 2m) [default: 30s]
   --user-agent UA         Custom User-Agent string [default: raria2/1.0]
   --rate-limit RATE       Rate limit for HTTP requests (requests per second) [default: 0]
+  --respect-robots        Respect robots.txt when crawling [default: false]
+  --accept-mime TYPES     Comma-separated list of MIME types to include
+  --reject-mime TYPES     Comma-separated list of MIME types to exclude
   --help, -h             display this help and exit
 ```
 
@@ -76,6 +79,15 @@ raria2 --write-batch downloads.txt --dry-run 'https://example.com/pub/'
 
 # Rate-limited crawling with custom User-Agent
 raria2 --rate-limit=2 --user-agent='MyBot/1.0' 'https://example.com/pub/'
+
+# Respect robots.txt while crawling
+raria2 --respect-robots 'https://example.com/pub/'
+
+# MIME-type filtering - only download PDFs and images
+raria2 --accept-mime 'application/pdf,image/jpeg,image/png' 'https://example.com/files/'
+
+# Exclude binary executables and archives
+raria2 --reject-mime 'application/octet-stream,application/x-executable,application/zip' 'https://example.com/pub/'
 ```
 
 ## Session Management

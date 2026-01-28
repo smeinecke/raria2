@@ -380,16 +380,32 @@ func TestDownloadResource_ExternalHostFallsBackToHostDir(t *testing.T) {
 	baseURL, _ := url.Parse("https://example.com/root/")
 	outputDir := tempDir(t)
 	r := &RAria2{
-		url:        baseURL,
-		OutputPath: outputDir,
-		DryRun:     true,
+		url:            baseURL,
+		OutputPath:     outputDir,
+		DryRun:         true,
+		DisableRetries: true, // Disable retries to avoid network timeout
 	}
 
-	r.downloadResource(1, "https://cdn.example.net/files/asset.bin")
+	// Mock the HTTP request to avoid network dependency
+	originalExecCommand := execCommand
+	defer func() { execCommand = originalExecCommand }()
+
+	// Create a mock server that returns a simple response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Use the test server URL directly (it's HTTP, not HTTPS)
+	testURL := server.URL + "/files/asset.bin"
+	r.downloadResource(1, testURL)
 
 	if assert.Len(t, r.downloadEntries, 1) {
 		entry := r.downloadEntries[0]
-		expectedDir := filepath.Join(outputDir, "cdn.example.net/files")
+		// Extract hostname from the test URL
+		parsedURL, _ := url.Parse(testURL)
+		expectedDir := filepath.Join(outputDir, parsedURL.Host+"/files")
 		assert.Equal(t, expectedDir, entry.Dir)
 	}
 }

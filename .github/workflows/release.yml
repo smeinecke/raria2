@@ -69,7 +69,7 @@ jobs:
           cd dist
           BINARY_NAME="${{ steps.compile.outputs.binary_name }}"
           if [ "${GOOS}" = "windows" ]; then
-            7z a "${BINARY_NAME}.zip" "${BINARY_NAME}.exe"
+            zip "${BINARY_NAME}.zip" "${BINARY_NAME}.exe"
             echo "archive_path=dist/${BINARY_NAME}.zip" >> "$GITHUB_OUTPUT"
           else
             tar -czf "${BINARY_NAME}.tar.gz" "${BINARY_NAME}"
@@ -84,6 +84,13 @@ jobs:
           else
             sha256sum "${{ steps.compile.outputs.binary_name }}.tar.gz" >> SHA256SUMS
           fi
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.compile.outputs.binary_name }}-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

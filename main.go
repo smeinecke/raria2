@@ -36,6 +36,9 @@ var args struct {
 	HTTPTimeout            time.Duration `arg:"--http-timeout" help:"HTTP client timeout" default:"30s"`
 	UserAgent              string        `arg:"--user-agent" help:"Custom User-Agent string" default:"raria2/1.0"`
 	RateLimit              float64       `arg:"--rate-limit" help:"Rate limit for HTTP requests (requests per second)" default:"0"`
+	RespectRobots          bool          `arg:"--respect-robots" help:"Respect robots.txt when crawling" default:"false"`
+	AcceptMime             []string      `arg:"--accept-mime" help:"Comma-separated list of MIME types to include"`
+	RejectMime             []string      `arg:"--reject-mime" help:"Comma-separated list of MIME types to exclude"`
 	Aria2Args              []string      `arg:"positional" help:"Options forwarded to aria2c after the URL (use -- before them if they look like flags)"`
 }
 
@@ -72,6 +75,9 @@ func main() {
 	client.UserAgent = args.UserAgent
 	client.RateLimit = args.RateLimit
 	client.MaxDepth = args.MaxDepth
+	client.RespectRobots = args.RespectRobots
+	client.AcceptMime = parseMimeArgs(args.AcceptMime)
+	client.RejectMime = parseMimeArgs(args.RejectMime)
 	client.AcceptExtensions = parseExtensionArgs(args.AcceptExtensions)
 	client.RejectExtensions = parseExtensionArgs(args.RejectExtensions)
 	client.AcceptFilenames = parseGlobArgs(args.AcceptFilenames)
@@ -114,14 +120,20 @@ func parseExtensionArgs(values []string) map[string]struct{} {
 	set := make(map[string]struct{})
 	for _, value := range splitAndTrim(values) {
 		value = strings.TrimPrefix(value, ".")
-		value = strings.ToLower(value)
-		if value == "" {
-			continue
+		if value != "" {
+			set[strings.ToLower(value)] = struct{}{}
 		}
-		set[value] = struct{}{}
 	}
-	if len(set) == 0 {
-		return nil
+	return set
+}
+
+func parseMimeArgs(values []string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, value := range splitAndTrim(values) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			set[strings.ToLower(value)] = struct{}{}
+		}
 	}
 	return set
 }
@@ -175,54 +187,44 @@ func compilePathPattern(pattern string) (*regexp.Regexp, error) {
 }
 
 func globToRegex(glob string) string {
+	// One-pass glob -> regex conversion.
+	// Semantics:
+	//   *  matches within a single path segment (no '/')
+	//   ** matches across path segments (may include '/')
+	//   ?  matches a single character within a segment (no '/')
 	var b strings.Builder
 	b.WriteString("^")
 
-	// Handle ** specially (matches across directories)
-	if strings.Contains(glob, "**") {
-		return globToRegexAdvanced(glob)
-	}
-
-	// Simple glob: * matches within one segment (no /)
-	segments := strings.Split(glob, "/")
-	for i, segment := range segments {
-		if i > 0 {
-			b.WriteString("/")
-		}
-		if segment == "" {
-			continue // Handle leading/trailing slashes
-		}
-
-		// Convert * to [^/]* (match anything except / within this segment)
-		regexSegment := strings.ReplaceAll(regexp.QuoteMeta(segment), "*", "[^/]*")
-		b.WriteString(regexSegment)
-	}
-
-	b.WriteString("$")
-	return b.String()
-}
-
-func globToRegexAdvanced(glob string) string {
-	var b strings.Builder
-	b.WriteString("^")
-
-	// Advanced glob with ** support
-	segments := strings.Split(glob, "/")
-	for i, segment := range segments {
-		if i > 0 {
-			b.WriteString("/")
-		}
-		if segment == "" {
-			continue // Handle leading/trailing slashes
-		}
-
-		if segment == "**" {
-			// ** matches zero or more path segments
-			b.WriteString("(?:[^/]+/)*[^/]*")
-		} else {
-			// Convert * to [^/]* (match anything except / within this segment)
-			regexSegment := strings.ReplaceAll(regexp.QuoteMeta(segment), "*", "[^/]*")
-			b.WriteString(regexSegment)
+	for i := 0; i < len(glob); {
+		ch := glob[i]
+		switch ch {
+		case '*':
+			// ** => cross-segment match
+			if i+1 < len(glob) && glob[i+1] == '*' {
+				b.WriteString(".*")
+				i += 2
+				continue
+			}
+			// * => within-segment match
+			b.WriteString("[^/]*")
+			i++
+			continue
+		case '?':
+			b.WriteString("[^/]")
+			i++
+			continue
+		case '/':
+			b.WriteByte('/')
+			i++
+			continue
+		default:
+			// Escape regex metacharacters.
+			switch ch {
+			case '.', '+', '(', ')', '|', '[', ']', '{', '}', '^', '$', '\\':
+				b.WriteByte('\\')
+			}
+			b.WriteByte(ch)
+			i++
 		}
 	}
 
