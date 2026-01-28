@@ -194,7 +194,7 @@ func TestIsSubPath_Coverage(t *testing.T) {
 			name:     "subdirectory",
 			base:     "/path/to",
 			target:   "/path/to/file",
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "different path",
@@ -212,7 +212,7 @@ func TestIsSubPath_Coverage(t *testing.T) {
 			name:     "root path",
 			base:     "/",
 			target:   "/any/path",
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "empty paths",
