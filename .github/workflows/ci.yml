@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [ "1.25.x", "1.24.x" ]
+        go-version: [ "1.25.x", "1.24.12" ]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
 
       - name: Run CI
         run: make ci
-        if: matrix.go-version == '1.24.x'
+        if: matrix.go-version == '1.24.12'
 
       - name: Run tests (compatibility check)
         run: make test
