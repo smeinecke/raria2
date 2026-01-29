@@ -690,7 +690,7 @@ func TestWriteBatch(t *testing.T) {
 	content, err := os.ReadFile(r.WriteBatch)
 	assert.NoError(t, err)
 
-	expected := "https://example.com/file1.bin\n  dir=downloads\nhttps://example.com/file2.bin\n"
+	expected := "https://example.com/file1.bin\n  dir=downloads\n\nhttps://example.com/file2.bin\n\n"
 	assert.Equal(t, expected, string(content))
 }
 
@@ -723,14 +723,14 @@ func TestWriteBatchEntryFormatsDir(t *testing.T) {
 	entry := aria2URLEntry{URL: "https://example.com/file.bin", Dir: "out"}
 	assert.NoError(t, writeBatchEntry(writer, entry))
 	assert.NoError(t, writer.Flush())
-	assert.Equal(t, "https://example.com/file.bin\n  dir=out\n", buf.String())
+	assert.Equal(t, "https://example.com/file.bin\n  dir=out\n\n", buf.String())
 
 	buf.Reset()
 	writer.Reset(&buf)
 	entry.Dir = ""
 	assert.NoError(t, writeBatchEntry(writer, entry))
 	assert.NoError(t, writer.Flush())
-	assert.Equal(t, "https://example.com/file.bin\n", buf.String())
+	assert.Equal(t, "https://example.com/file.bin\n\n", buf.String())
 }
 
 func TestBatchFileSinkWritesEntries(t *testing.T) {
@@ -745,7 +745,7 @@ func TestBatchFileSinkWritesEntries(t *testing.T) {
 
 	content, err := os.ReadFile(path)
 	assert.NoError(t, err)
-	assert.Equal(t, "https://example.com/file.bin\n  dir=downloads\n", string(content))
+	assert.Equal(t, "https://example.com/file.bin\n  dir=downloads\n\n", string(content))
 }
 
 func TestAria2SinkStreamsEntries(t *testing.T) {
@@ -774,7 +774,7 @@ func TestAria2SinkStreamsEntries(t *testing.T) {
 
 	content, err := os.ReadFile(capture)
 	assert.NoError(t, err)
-	assert.Equal(t, "https://example.com/file.bin\n  dir=out\n", string(content))
+	assert.Equal(t, "https://example.com/file.bin\n  dir=out\n\n", string(content))
 }
 
 func TestIsSubPath(t *testing.T) {
