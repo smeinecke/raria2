@@ -95,6 +95,16 @@ func New(url *url.URL) *RAria2 {
 	}
 }
 
+func (r *RAria2) downloadChannelBufferSize() int {
+	const defaultBuffer = 64
+	if r.Aria2EntriesPerSession > 0 {
+		if r.Aria2EntriesPerSession < 1 {
+			return 1
+		}
+		return r.Aria2EntriesPerSession
+	}
+	return defaultBuffer
+}
 func (r *RAria2) sessionEntryLimit() int {
 	if r.Aria2EntriesPerSession <= 0 {
 		return 0
@@ -365,7 +375,7 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
 
-	entriesCh := make(chan aria2URLEntry, defaultDownloadQueueSize)
+	entriesCh := make(chan aria2URLEntry, r.downloadChannelBufferSize())
 	downloadErrCh := make(chan error, 1)
 	r.downloadEntriesCh = entriesCh
 
