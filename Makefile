@@ -40,17 +40,8 @@ govulncheck: $(GOVULNCHECK)
 	$(GOVULNCHECK) ./...
 
 tidy-check:
-	@before=$$(mktemp); after=$$(mktemp); \
-	git diff -- go.mod go.sum > $$before || true; \
-	$(GO) mod tidy; \
-	git diff -- go.mod go.sum > $$after || true; \
-	if ! diff -q $$before $$after >/dev/null; then \
-		echo "go.mod/go.sum are not tidy" >&2; \
-		diff $$before $$after >&2 || true; \
-		rm -f $$before $$after; \
-		exit 1; \
-	fi; \
-	rm -f $$before $$after
+	$(GO) mod tidy
+	@git diff --quiet -- go.mod go.sum || (echo "go.mod/go.sum are not tidy" >&2; exit 1)
 
 tools: $(GOLANGCI_LINT) $(GOVULNCHECK)
 
