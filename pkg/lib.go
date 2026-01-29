@@ -38,6 +38,7 @@ type RAria2 struct {
 	MaxDepth               int
 	OutputPath             string
 	Aria2AfterURLArgs      []string
+	Aria2EntriesPerSession int
 	HTTPTimeout            time.Duration
 	UserAgent              string
 	RateLimit              float64
@@ -77,6 +78,9 @@ type RAria2 struct {
 
 	// channel used to stream download entries to aria2c/batch writer
 	downloadEntriesCh chan aria2URLEntry
+
+	// injectable sink factory (used in tests)
+	sinkFactory func(context.Context, *RAria2) (downloadSink, error)
 }
 
 func New(url *url.URL) *RAria2 {
@@ -88,6 +92,28 @@ func New(url *url.URL) *RAria2 {
 		HTTPTimeout:            30 * time.Second,
 		urlCache:               make(map[string]struct{}),
 	}
+}
+
+func (r *RAria2) downloadChannelBufferSize() int {
+	const defaultBuffer = 64
+	if r.Aria2EntriesPerSession > 0 {
+		if r.Aria2EntriesPerSession < 1 {
+			return 1
+		}
+		return r.Aria2EntriesPerSession
+	}
+	return defaultBuffer
+}
+
+func (r *RAria2) sessionEntryLimit() int {
+	if r.Aria2EntriesPerSession <= 0 {
+		return 0
+	}
+	if r.WriteBatch != "" {
+		logrus.Warn("--aria2-session-size is ignored when --write-batch is set")
+		return 0
+	}
+	return r.Aria2EntriesPerSession
 }
 
 func (r *RAria2) ensureOutputPath() error {
@@ -353,7 +379,7 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
 
-	entriesCh := make(chan aria2URLEntry)
+	entriesCh := make(chan aria2URLEntry, r.downloadChannelBufferSize())
 	downloadErrCh := make(chan error, 1)
 	r.downloadEntriesCh = entriesCh
 
@@ -957,10 +983,25 @@ func (r *RAria2) enqueueDownloadEntry(entry aria2URLEntry) {
 
 func (r *RAria2) executeBatchDownload(ctx context.Context, entries <-chan aria2URLEntry) error {
 	var (
-		sink       downloadSink
-		sinkErr    error
-		entryCount int
+		sink              downloadSink
+		sinkErr           error
+		entryCount        int
+		sessionEntryCount int
 	)
+
+	sessionLimit := r.sessionEntryLimit()
+	flushSession := func() error {
+		if sink == nil {
+			sessionEntryCount = 0
+			return nil
+		}
+		if err := sink.Close(); err != nil {
+			return err
+		}
+		sink = nil
+		sessionEntryCount = 0
+		return nil
+	}
 
 	for entry := range entries {
 		if sink == nil {
@@ -970,20 +1011,24 @@ func (r *RAria2) executeBatchDownload(ctx context.Context, entries <-chan aria2U
 			}
 		}
 		entryCount++
+		sessionEntryCount++
 		if err := sink.Write(entry); err != nil {
-			if sink != nil {
-				_ = sink.Close()
-			}
+			_ = flushSession()
 			return err
+		}
+		if sessionLimit > 0 && sessionEntryCount >= sessionLimit {
+			if err := flushSession(); err != nil {
+				return err
+			}
 		}
 	}
 
-	if sink == nil {
+	if entryCount == 0 {
 		logrus.Info("no downloadable resources found")
 		return nil
 	}
 
-	if err := sink.Close(); err != nil {
+	if err := flushSession(); err != nil {
 		return err
 	}
 
@@ -1007,6 +1052,9 @@ type downloadSink interface {
 func (r *RAria2) newDownloadSink(ctx context.Context) (downloadSink, error) {
 	if r.WriteBatch != "" {
 		return newBatchFileSink(r.WriteBatch)
+	}
+	if r.sinkFactory != nil {
+		return r.sinkFactory(ctx, r)
 	}
 	return newAria2Sink(ctx, r)
 }
@@ -1134,6 +1182,9 @@ func writeBatchEntry(writer *bufio.Writer, entry aria2URLEntry) error {
 		if _, err := fmt.Fprintf(writer, "  dir=%s\n", entry.Dir); err != nil {
 			return err
 		}
+	}
+	if _, err := writer.WriteString("\n"); err != nil {
+		return err
 	}
 	return nil
 }

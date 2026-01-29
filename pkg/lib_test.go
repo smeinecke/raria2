@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +28,25 @@ func TestSameUrl(t *testing.T) {
 	assert.True(t, SameUrl(firstUrl, thirdUrl))
 	assert.True(t, SameUrl(secondUrl, thirdUrl))
 	assert.False(t, SameUrl(firstUrl, fourthUrl))
+}
+
+type mockSink struct {
+	writeFn func(aria2URLEntry) error
+	closeFn func() error
+}
+
+func (m *mockSink) Write(entry aria2URLEntry) error {
+	if m.writeFn != nil {
+		return m.writeFn(entry)
+	}
+	return nil
+}
+
+func (m *mockSink) Close() error {
+	if m.closeFn != nil {
+		return m.closeFn()
+	}
+	return nil
 }
 
 func TestPathAllowedAcceptAndReject(t *testing.T) {
@@ -266,6 +286,40 @@ func TestExecuteBatchDownloadNoEntries(t *testing.T) {
 	entries := make(chan aria2URLEntry)
 	close(entries)
 	assert.NoError(t, r.executeBatchDownload(context.Background(), entries))
+}
+
+func TestExecuteBatchDownloadRespectsSessionSize(t *testing.T) {
+	r := &RAria2{Aria2EntriesPerSession: 2}
+	var sessionWrites []int
+	r.sinkFactory = func(ctx context.Context, _ *RAria2) (downloadSink, error) {
+		sessionWrites = append(sessionWrites, 0)
+		idx := len(sessionWrites) - 1
+		return &mockSink{
+			writeFn: func(aria2URLEntry) error {
+				sessionWrites[idx]++
+				return nil
+			},
+		}, nil
+	}
+
+	entries := make(chan aria2URLEntry, 5)
+	for i := 0; i < 5; i++ {
+		entries <- aria2URLEntry{URL: fmt.Sprintf("https://example.com/file%02d.bin", i)}
+	}
+	close(entries)
+
+	assert.NoError(t, r.executeBatchDownload(context.Background(), entries))
+	assert.Equal(t, []int{2, 2, 1}, sessionWrites)
+}
+
+func TestWaitForRateLimitHonorsInterval(t *testing.T) {
+	r := &RAria2{RateLimit: 2} // 2 requests per second -> 500ms interval
+	r.waitForRateLimit()
+	start := time.Now()
+	r.waitForRateLimit()
+	elapsed := time.Since(start)
+	minInterval := time.Duration(float64(time.Second) / r.RateLimit)
+	assert.GreaterOrEqual(t, elapsed, minInterval-50*time.Millisecond)
 }
 
 func TestGetLinksByUrlFetchesRemoteLinks(t *testing.T) {
