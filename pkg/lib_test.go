@@ -30,6 +30,11 @@ func TestSameUrl(t *testing.T) {
 	assert.False(t, SameUrl(firstUrl, fourthUrl))
 }
 
+func runTestClient(t *testing.T, client *RAria2) error {
+	t.Helper()
+	return client.RunWithContext(context.Background())
+}
+
 type mockSink struct {
 	writeFn func(aria2URLEntry) error
 	closeFn func() error
@@ -154,7 +159,7 @@ func TestRun_FailsWhenAria2Missing(t *testing.T) {
 	}
 
 	client := &RAria2{}
-	err := client.RunWithContext(context.Background())
+	err := runTestClient(t, client)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "aria2c is required")
 }
@@ -193,7 +198,7 @@ func TestRun_PathFilters(t *testing.T) {
 	client.OutputPath = tempDir(t)
 	client.AcceptPathRegex = []*regexp.Regexp{regexp.MustCompile(`^/files/`)}
 
-	err = client.RunWithContext(context.Background())
+	err = runTestClient(t, client)
 	assert.Nil(t, err)
 	if assert.Len(t, client.downloadEntries, 2) {
 		for _, entry := range client.downloadEntries {
@@ -359,7 +364,7 @@ func TestRun_WithRootFixture(t *testing.T) {
 	client.OutputPath = tempDir(t)
 	client.DryRun = true
 
-	err = client.Run()
+	err = client.RunWithContext(context.Background())
 	assert.Nil(t, err)
 }
 
@@ -375,7 +380,7 @@ func TestRun_FromNestedPath(t *testing.T) {
 	client.MaxConcurrentDownload = 2
 	client.MaxConnectionPerServer = 2
 
-	err = client.Run()
+	err = client.RunWithContext(context.Background())
 	assert.Nil(t, err)
 }
 
