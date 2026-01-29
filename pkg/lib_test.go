@@ -154,7 +154,7 @@ func TestRun_FailsWhenAria2Missing(t *testing.T) {
 	}
 
 	client := &RAria2{}
-	err := client.Run()
+	err := client.RunWithContext(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "aria2c is required")
 }
@@ -193,7 +193,7 @@ func TestRun_PathFilters(t *testing.T) {
 	client.OutputPath = tempDir(t)
 	client.AcceptPathRegex = []*regexp.Regexp{regexp.MustCompile(`^/files/`)}
 
-	err = client.Run()
+	err = client.RunWithContext(context.Background())
 	assert.Nil(t, err)
 	if assert.Len(t, client.downloadEntries, 2) {
 		for _, entry := range client.downloadEntries {
@@ -213,7 +213,7 @@ func TestRun_RespectsMaxDepth(t *testing.T) {
 	client.DryRun = true
 	client.MaxDepth = 0
 
-	err = client.Run()
+	err = client.RunWithContext(context.Background())
 	assert.Nil(t, err)
 	assert.Len(t, client.downloadEntries, 0)
 }
@@ -631,7 +631,7 @@ func TestVisitedCachePersistence(t *testing.T) {
 
 	assert.NoError(t, r.saveVisitedCache())
 	fileEntries := readVisitedCache(t, cacheFile)
-	assert.Contains(t, fileEntries, canonicalCacheKey("https://example.com/root/new.bin"))
+	assert.Contains(t, fileEntries, canonicalURL("https://example.com/root/new.bin"))
 }
 
 func writeVisitedCache(t *testing.T, path string, entries []string) {

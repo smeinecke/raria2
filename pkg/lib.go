@@ -27,8 +27,9 @@ import (
 )
 
 var (
-	execCommand = exec.Command
-	lookPath    = exec.LookPath
+	execCommand              = exec.Command
+	lookPath                 = exec.LookPath
+	defaultDownloadQueueSize = 256
 )
 
 type RAria2 struct {
@@ -92,17 +93,6 @@ func New(url *url.URL) *RAria2 {
 		HTTPTimeout:            30 * time.Second,
 		urlCache:               make(map[string]struct{}),
 	}
-}
-
-func (r *RAria2) downloadChannelBufferSize() int {
-	const defaultBuffer = 64
-	if r.Aria2EntriesPerSession > 0 {
-		if r.Aria2EntriesPerSession < 1 {
-			return 1
-		}
-		return r.Aria2EntriesPerSession
-	}
-	return defaultBuffer
 }
 
 func (r *RAria2) sessionEntryLimit() int {
@@ -360,10 +350,6 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 	return getLinks(parsedUrl, res.Body)
 }
 
-func (r *RAria2) Run() error {
-	return r.RunWithContext(context.Background())
-}
-
 func (r *RAria2) RunWithContext(ctx context.Context) error {
 	if _, err := lookPath("aria2c"); err != nil {
 		return fmt.Errorf("aria2c is required but was not found in PATH: %w", err)
@@ -379,7 +365,7 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
 
-	entriesCh := make(chan aria2URLEntry, r.downloadChannelBufferSize())
+	entriesCh := make(chan aria2URLEntry, defaultDownloadQueueSize)
 	downloadErrCh := make(chan error, 1)
 	r.downloadEntriesCh = entriesCh
 
@@ -546,7 +532,7 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 }
 
 func (r *RAria2) markVisited(u string) bool {
-	key := canonicalCacheKey(u)
+	key := canonicalURL(u)
 	r.urlCacheMu.Lock()
 	defer r.urlCacheMu.Unlock()
 	if _, exists := r.urlCache[key]; exists {
@@ -585,7 +571,7 @@ func (r *RAria2) loadVisitedCache() error {
 
 	r.urlCacheMu.Lock()
 	for _, entry := range entries {
-		r.urlCache[canonicalCacheKey(entry)] = struct{}{}
+		r.urlCache[canonicalURL(entry)] = struct{}{}
 	}
 	r.urlCacheMu.Unlock()
 
@@ -690,10 +676,6 @@ func canonicalURL(raw string) string {
 	}
 
 	return parsed.String()
-}
-
-func canonicalCacheKey(raw string) string {
-	return canonicalURL(raw)
 }
 
 func (r *RAria2) pathAllowed(u *url.URL) bool {
