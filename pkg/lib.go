@@ -1071,7 +1071,10 @@ func newAria2Sink(ctx context.Context, r *RAria2) (downloadSink, error) {
 }
 
 func (s *aria2Sink) Write(entry aria2URLEntry) error {
-	return writeBatchEntry(s.writer, entry)
+	if err := writeBatchEntry(s.writer, entry); err != nil {
+		return err
+	}
+	return s.writer.Flush()
 }
 
 func (s *aria2Sink) Close() error {
