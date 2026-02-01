@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/temoto/robotstxt"
 )
 
 func TestSameUrl(t *testing.T) {
@@ -28,6 +29,141 @@ func TestSameUrl(t *testing.T) {
 	assert.True(t, SameUrl(firstUrl, thirdUrl))
 	assert.True(t, SameUrl(secondUrl, thirdUrl))
 	assert.False(t, SameUrl(firstUrl, fourthUrl))
+}
+
+func TestSubDownloadUrlsQueuesDownloads(t *testing.T) {
+	ts := newFixtureServer()
+	t.Cleanup(ts.Close)
+
+	base, _ := url.Parse(ts.URL + "/")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = 1
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	assert.NotEmpty(t, r.downloadEntries)
+	assert.False(t, r.markVisited(base.String()))
+}
+
+func TestSubDownloadUrlsRespectsDepthLimit(t *testing.T) {
+	ts := newFixtureServer()
+	t.Cleanup(ts.Close)
+
+	base, _ := url.Parse(ts.URL + "/")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = 0
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	assert.Len(t, r.downloadEntries, 0)
+}
+
+func TestSubDownloadUrlsContextCancellation(t *testing.T) {
+	r := &RAria2{url: mustParseURL(t, "https://example.com/root/"), urlCache: NewURLCache("")}
+	r.FiltersConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.subDownloadUrls(ctx, 0, r.url.String())
+	assert.Empty(t, r.downloadEntries)
+}
+
+func TestSubDownloadUrlsRespectsRobots(t *testing.T) {
+	base := mustParseURL(t, "https://example.com/root/")
+	r := &RAria2{
+		url:           base,
+		RespectRobots: true,
+		urlCache:      NewURLCache(""),
+	}
+	r.FiltersConfig()
+	robotsData, err := robotstxt.FromBytes([]byte("User-agent: *\nDisallow: /\n"))
+	assert.NoError(t, err)
+	r.robotsCache = map[string]*robotstxt.RobotsData{"example.com": robotsData}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	assert.Empty(t, r.downloadEntries)
+}
+
+func TestDownloadResourceInvalidURL(t *testing.T) {
+	r := &RAria2{
+		UserAgent:  "test",
+		OutputPath: tempDir(t),
+		DryRun:     true,
+		url:        mustParseURL(t, "https://example.com/root/"),
+	}
+
+	r.downloadResource(0, "http://%gh&%")
+	assert.Len(t, r.downloadEntries, 0)
+}
+
+func TestLoadVisitedCacheInitializesCache(t *testing.T) {
+	tmp := tempDir(t)
+	cacheFile := filepath.Join(tmp, "visited.txt")
+	writeVisitedCache(t, cacheFile, []string{"https://example.com/path"})
+
+	r := &RAria2{VisitedCachePath: cacheFile}
+	assert.NoError(t, r.loadVisitedCache())
+	if assert.NotNil(t, r.urlCache) {
+		assert.False(t, r.markVisited("https://example.com/path"))
+	}
+}
+
+func TestSaveVisitedCacheHandlesNil(t *testing.T) {
+	r := &RAria2{}
+	assert.NoError(t, r.saveVisitedCache())
+}
+
+func TestSaveVisitedCacheWritesEntries(t *testing.T) {
+	tmp := tempDir(t)
+	cacheFile := filepath.Join(tmp, "visited.txt")
+	r := &RAria2{VisitedCachePath: cacheFile, urlCache: NewURLCache("")}
+	r.markVisited("https://example.com/new")
+
+	assert.NoError(t, r.saveVisitedCache())
+	entries := readVisitedCache(t, cacheFile)
+	assert.Contains(t, entries, canonicalURL("https://example.com/new"))
+}
+
+func TestWriteBatchFile(t *testing.T) {
+	tmp := tempDir(t)
+	path := filepath.Join(tmp, "batch.txt")
+	r := &RAria2{WriteBatch: path}
+	r.downloadEntries = []aria2URLEntry{{}, {}}
+
+	content := []byte("entry-one\nentry-two\n")
+	assert.NoError(t, r.writeBatchFile(content))
+
+	written, err := os.ReadFile(path)
+	assert.NoError(t, err)
+	assert.Equal(t, content, written)
+}
+
+func TestWriteBatchFileFailsWithoutDirectory(t *testing.T) {
+	tmp := tempDir(t)
+	path := filepath.Join(tmp, "missing", "batch.txt")
+	r := &RAria2{WriteBatch: path}
+
+	err := r.writeBatchFile([]byte("data"))
+	assert.Error(t, err)
+}
+
+func TestRAria2SessionEntryLimit(t *testing.T) {
+	r := &RAria2{Aria2EntriesPerSession: 3}
+	assert.Equal(t, 3, r.sessionEntryLimit())
+
+	r.Aria2EntriesPerSession = 0
+	assert.Equal(t, 0, r.sessionEntryLimit())
+
+	r.Aria2EntriesPerSession = 10
+	r.WriteBatch = "batch.txt"
+	assert.Equal(t, 0, r.sessionEntryLimit())
+}
+
+func TestMarkVisitedInitializesCache(t *testing.T) {
+	r := &RAria2{}
+	assert.True(t, r.markVisited("https://example.com/a"))
+	assert.False(t, r.markVisited("https://example.com/a"))
 }
 
 func runTestClient(t *testing.T, client *RAria2) error {
@@ -166,6 +302,117 @@ func TestRun_FailsWhenAria2Missing(t *testing.T) {
 	err := runTestClient(t, client)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "aria2c is required")
+}
+
+func newTestRAria2ForHTTP(t *testing.T, handler http.HandlerFunc) (*RAria2, string) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	r := &RAria2{
+		UserAgent:      "test-agent",
+		DisableRetries: true,
+	}
+	r.httpClient = NewHTTPClient(2*time.Second, 0)
+	r.httpClient.client = server.Client()
+
+	return r, server.URL + "/resource"
+}
+
+func TestRAria2IsHtmlPage(t *testing.T) {
+	tests := []struct {
+		name      string
+		handler   func(t *testing.T) http.HandlerFunc
+		expect    bool
+		expectErr bool
+	}{
+		{
+			name:   "head_declares_html",
+			expect: true,
+			handler: func(t *testing.T) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, http.MethodHead, r.Method)
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.WriteHeader(http.StatusOK)
+				}
+			},
+		},
+		{
+			name:   "head_missing_content_type_triggers_range_get",
+			expect: true,
+			handler: func(t *testing.T) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					switch r.Method {
+					case http.MethodHead:
+						w.WriteHeader(http.StatusOK)
+					case http.MethodGet:
+						assert.Equal(t, "bytes=0-1023", r.Header.Get("Range"))
+						w.WriteHeader(http.StatusPartialContent)
+						_, _ = w.Write([]byte("<!doctype html><html></html>"))
+					default:
+						t.Fatalf("unexpected method: %s", r.Method)
+					}
+				}
+			},
+		},
+		{
+			name:   "range_not_supported_falls_back_to_full_get",
+			expect: true,
+			handler: func(t *testing.T) http.HandlerFunc {
+				var rangeAttempt bool
+				return func(w http.ResponseWriter, r *http.Request) {
+					switch r.Method {
+					case http.MethodHead:
+						w.WriteHeader(http.StatusOK)
+					case http.MethodGet:
+						if r.Header.Get("Range") != "" {
+							rangeAttempt = true
+							w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+							return
+						}
+						assert.True(t, rangeAttempt, "expected ranged request before full GET")
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write([]byte("<html><body>full</body></html>"))
+					default:
+						t.Fatalf("unexpected method: %s", r.Method)
+					}
+				}
+			},
+		},
+		{
+			name:   "non_html_content",
+			expect: false,
+			handler: func(t *testing.T) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, http.MethodHead, r.Method)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+				}
+			},
+		},
+		{
+			name:      "head_error",
+			expectErr: true,
+			handler: func(t *testing.T) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, url := newTestRAria2ForHTTP(t, tt.handler(t))
+			result, err := r.IsHtmlPage(url)
+			if tt.expectErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
 }
 
 func TestDownloadResource_ExtensionFilters(t *testing.T) {

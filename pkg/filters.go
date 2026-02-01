@@ -20,7 +20,7 @@ type FilterManager struct {
 	AcceptMime           map[string]struct{}
 	RejectMime           map[string]struct{}
 	baseURL              *url.URL
-	
+
 	// Cache for case-insensitive regex patterns
 	ciRegexCache   map[*regexp.Regexp]*regexp.Regexp
 	ciRegexCacheMu sync.RWMutex
@@ -29,7 +29,7 @@ type FilterManager struct {
 // NewFilterManager creates a new filter manager
 func NewFilterManager(baseURL *url.URL) *FilterManager {
 	return &FilterManager{
-		baseURL:     baseURL,
+		baseURL:      baseURL,
 		ciRegexCache: make(map[*regexp.Regexp]*regexp.Regexp),
 	}
 }
