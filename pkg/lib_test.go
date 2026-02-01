@@ -56,72 +56,76 @@ func (m *mockSink) Close() error {
 
 func TestPathAllowedAcceptAndReject(t *testing.T) {
 	base := mustParseURL(t, "https://example.com/root/")
-	r := &RAria2{
-		url: base,
-		AcceptPathRegex: []*regexp.Regexp{
-			regexp.MustCompile(`^/root/files/`),
-		},
+	r := &RAria2{url: base}
+	filters := r.FiltersConfig()
+	filters.AcceptPathRegex = []*regexp.Regexp{
+		regexp.MustCompile(`^/root/files/`),
 	}
 
-	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/")))
-	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/files/doc.bin")))
-	assert.False(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/misc")))
+	assert.True(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/")))
+	assert.True(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/files/doc.bin")))
+	assert.False(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/misc")))
 
-	r.RejectPathRegex = []*regexp.Regexp{regexp.MustCompile(`\.tmp$`)}
-	assert.False(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/files/data.tmp")))
+	filters.RejectPathRegex = []*regexp.Regexp{regexp.MustCompile(`\.tmp$`)}
+	assert.False(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/files/data.tmp")))
 }
 
 func TestFilenameAllowedAcceptAndReject(t *testing.T) {
 	base := mustParseURL(t, "https://example.com/root/")
 	r := &RAria2{url: base}
+	filters := r.FiltersConfig()
 
 	// Test accept filename glob
 	pattern := regexp.MustCompile(`^file.*\.bin$`)
-	r.AcceptFilenames = map[string]*regexp.Regexp{
+	filters.AcceptFilenames = map[string]*regexp.Regexp{
 		"file*.bin": pattern,
 	}
-	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/file1.bin")))
-	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/file123.bin")))
-	assert.False(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/other.bin")))
+	assert.True(t, filters.FilenameAllowed(mustParseURL(t, "https://example.com/root/file1.bin")))
+	assert.True(t, filters.FilenameAllowed(mustParseURL(t, "https://example.com/root/file123.bin")))
+	assert.False(t, filters.FilenameAllowed(mustParseURL(t, "https://example.com/root/other.bin")))
 
 	// Test reject filename glob
-	r.AcceptFilenames = nil
+	filters.AcceptFilenames = nil
 	pattern = regexp.MustCompile(`^.*\.tmp$`)
-	r.RejectFilenames = map[string]*regexp.Regexp{
+	filters.RejectFilenames = map[string]*regexp.Regexp{
 		"*.tmp": pattern,
 	}
-	assert.False(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/data.tmp")))
-	assert.True(t, r.filenameAllowed(mustParseURL(t, "https://example.com/root/data.bin")))
+	assert.False(t, filters.FilenameAllowed(mustParseURL(t, "https://example.com/root/data.tmp")))
+	assert.True(t, filters.FilenameAllowed(mustParseURL(t, "https://example.com/root/data.bin")))
 }
 
 func TestCaseInsensitivePaths(t *testing.T) {
 	base := mustParseURL(t, "https://example.com/root/")
-	r := &RAria2{url: base, CaseInsensitivePaths: true}
+	r := &RAria2{url: base}
+	filters := r.FiltersConfig()
+	filters.CaseInsensitivePaths = true
 
 	// Test case-insensitive path matching
 	pattern := regexp.MustCompile(`^/root/files/.*`)
-	r.AcceptPathRegex = []*regexp.Regexp{pattern}
-	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/FILES/data.bin")))
-	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/files/data.bin")))
+	filters.AcceptPathRegex = []*regexp.Regexp{pattern}
+	assert.True(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/FILES/data.bin")))
+	assert.True(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/files/data.bin")))
 
 	// Test case-insensitive reject
-	r.AcceptPathRegex = nil
+	filters.AcceptPathRegex = nil
 	pattern = regexp.MustCompile(`^/root/temp/.*`)
-	r.RejectPathRegex = []*regexp.Regexp{pattern}
-	assert.False(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/TEMP/data.bin")))
-	assert.True(t, r.pathAllowed(mustParseURL(t, "https://example.com/root/other/data.bin")))
+	filters.RejectPathRegex = []*regexp.Regexp{pattern}
+	assert.False(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/TEMP/data.bin")))
+	assert.True(t, filters.PathAllowed(mustParseURL(t, "https://example.com/root/other/data.bin")))
 }
 
 func TestExtensionAllowedAcceptAndReject(t *testing.T) {
 	base := mustParseURL(t, "https://example.com/root/")
-	r := &RAria2{url: base, AcceptExtensions: map[string]struct{}{"bin": {}, "iso": {}}}
-	assert.True(t, r.extensionAllowed(mustParseURL(t, "https://example.com/root/image.iso")))
-	assert.False(t, r.extensionAllowed(mustParseURL(t, "https://example.com/root/image.txt")))
+	r := &RAria2{url: base}
+	filters := r.FiltersConfig()
+	filters.AcceptExtensions = map[string]struct{}{"bin": {}, "iso": {}}
+	assert.True(t, filters.ExtensionAllowed(mustParseURL(t, "https://example.com/root/image.iso")))
+	assert.False(t, filters.ExtensionAllowed(mustParseURL(t, "https://example.com/root/image.txt")))
 
-	r.AcceptExtensions = nil
-	r.RejectExtensions = map[string]struct{}{"zip": {}}
-	assert.False(t, r.extensionAllowed(mustParseURL(t, "https://example.com/root/archive.zip")))
-	assert.True(t, r.extensionAllowed(mustParseURL(t, "https://example.com/root/archive.bin")))
+	filters.AcceptExtensions = nil
+	filters.RejectExtensions = map[string]struct{}{"zip": {}}
+	assert.False(t, filters.ExtensionAllowed(mustParseURL(t, "https://example.com/root/archive.zip")))
+	assert.True(t, filters.ExtensionAllowed(mustParseURL(t, "https://example.com/root/archive.bin")))
 }
 
 func TestMatchAnyRegexHelper(t *testing.T) {
@@ -146,9 +150,9 @@ func TestEnqueueDownloadEntry(t *testing.T) {
 }
 
 func TestIsHTMLContent(t *testing.T) {
-	assert.True(t, isHTMLContent("text/html; charset=utf-8"))
-	assert.True(t, isHTMLContent("text/html"))
-	assert.False(t, isHTMLContent("application/octet-stream"))
+	assert.True(t, IsHTMLContent("text/html; charset=utf-8"))
+	assert.True(t, IsHTMLContent("text/html"))
+	assert.False(t, IsHTMLContent("application/octet-stream"))
 }
 
 func TestRun_FailsWhenAria2Missing(t *testing.T) {
@@ -168,22 +172,23 @@ func TestDownloadResource_ExtensionFilters(t *testing.T) {
 	baseURL, _ := url.Parse("https://example.com/root/")
 	outputDir := tempDir(t)
 	r := &RAria2{
-		url:              baseURL,
-		OutputPath:       outputDir,
-		DryRun:           true,
-		AcceptExtensions: map[string]struct{}{"bin": {}},
+		url:        baseURL,
+		OutputPath: outputDir,
+		DryRun:     true,
 	}
+	filters := r.FiltersConfig()
+	filters.AcceptExtensions = map[string]struct{}{"bin": {}}
 
 	r.downloadResource(1, "https://example.com/root/file.bin")
 	assert.Len(t, r.downloadEntries, 1)
 
 	r.downloadEntries = nil
-	r.AcceptExtensions = map[string]struct{}{"txt": {}}
+	filters.AcceptExtensions = map[string]struct{}{"txt": {}}
 	r.downloadResource(1, "https://example.com/root/file.bin")
 	assert.Len(t, r.downloadEntries, 0)
 
-	r.AcceptExtensions = nil
-	r.RejectExtensions = map[string]struct{}{"bin": {}}
+	filters.AcceptExtensions = nil
+	filters.RejectExtensions = map[string]struct{}{"bin": {}}
 	r.downloadResource(1, "https://example.com/root/file.bin")
 	assert.Len(t, r.downloadEntries, 0)
 }
@@ -196,7 +201,7 @@ func TestRun_PathFilters(t *testing.T) {
 	assert.Nil(t, err)
 	client := newTestClient(baseURL)
 	client.OutputPath = tempDir(t)
-	client.AcceptPathRegex = []*regexp.Regexp{regexp.MustCompile(`^/files/`)}
+	client.FiltersConfig().AcceptPathRegex = []*regexp.Regexp{regexp.MustCompile(`^/files/`)}
 
 	err = runTestClient(t, client)
 	assert.Nil(t, err)
@@ -269,7 +274,7 @@ func TestExecuteBatchDownloadInvokesCommand(t *testing.T) {
 	r := &RAria2{
 		MaxConnectionPerServer: 2,
 		MaxConcurrentDownload:  1,
-		urlCache:               make(map[string]struct{}),
+		urlCache:               NewURLCache(""),
 	}
 
 	entry := aria2URLEntry{URL: "https://example.com/file1.bin", Dir: "out"}
@@ -319,9 +324,9 @@ func TestExecuteBatchDownloadRespectsSessionSize(t *testing.T) {
 
 func TestWaitForRateLimitHonorsInterval(t *testing.T) {
 	r := &RAria2{RateLimit: 2} // 2 requests per second -> 500ms interval
-	r.waitForRateLimit()
+	r.client().waitForRateLimit()
 	start := time.Now()
-	r.waitForRateLimit()
+	r.client().waitForRateLimit()
 	elapsed := time.Since(start)
 	minInterval := time.Duration(float64(time.Second) / r.RateLimit)
 	assert.GreaterOrEqual(t, elapsed, minInterval-50*time.Millisecond)
@@ -563,7 +568,7 @@ func TestEnsureOutputPathDerivesFromURL(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	base := mustParseURL(t, "https://example.com/root/path/")
-	r := &RAria2{url: base, urlCache: make(map[string]struct{})}
+	r := &RAria2{url: base, urlCache: NewURLCache("")}
 
 	err = r.ensureOutputPath()
 	assert.NoError(t, err)
@@ -577,7 +582,7 @@ func TestEnsureOutputPathHonorsCustomDir(t *testing.T) {
 	tmp := tempDir(t)
 	custom := filepath.Join(tmp, "custom-out")
 	base := mustParseURL(t, "https://example.com/root/")
-	r := &RAria2{url: base, OutputPath: custom, urlCache: make(map[string]struct{})}
+	r := &RAria2{url: base, OutputPath: custom, urlCache: NewURLCache("")}
 	assert.NoError(t, os.MkdirAll(custom, 0o755))
 
 	assert.NoError(t, r.ensureOutputPath())
@@ -585,7 +590,7 @@ func TestEnsureOutputPathHonorsCustomDir(t *testing.T) {
 }
 
 func TestEnsureOutputPathFailWithoutURL(t *testing.T) {
-	r := &RAria2{urlCache: make(map[string]struct{})}
+	r := &RAria2{urlCache: NewURLCache("")}
 	err := r.ensureOutputPath()
 	assert.Error(t, err)
 }
@@ -593,7 +598,7 @@ func TestEnsureOutputPathFailWithoutURL(t *testing.T) {
 func TestEnsureOutputDirCreatesDirectories(t *testing.T) {
 	tmp := tempDir(t)
 	target := filepath.Join(tmp, "nested", "dir")
-	r := &RAria2{}
+	r := &RAria2{urlCache: NewURLCache("")}
 
 	assert.NoError(t, r.ensureOutputDir(0, target))
 	info, err := os.Stat(target)
@@ -604,7 +609,7 @@ func TestEnsureOutputDirCreatesDirectories(t *testing.T) {
 func TestEnsureOutputDirDryRunSkipsCreation(t *testing.T) {
 	tmp := tempDir(t)
 	target := filepath.Join(tmp, "dry", "dir")
-	r := &RAria2{DryRun: true}
+	r := &RAria2{DryRun: true, urlCache: NewURLCache("")}
 
 	assert.NoError(t, r.ensureOutputDir(1, target))
 	_, err := os.Stat(target)
@@ -613,7 +618,7 @@ func TestEnsureOutputDirDryRunSkipsCreation(t *testing.T) {
 }
 
 func TestMarkVisitedCachesURLs(t *testing.T) {
-	r := &RAria2{urlCache: make(map[string]struct{})}
+	r := &RAria2{urlCache: NewURLCache("")}
 	assert.True(t, r.markVisited("https://example.com"))
 	assert.False(t, r.markVisited("https://example.com"))
 }
@@ -627,7 +632,7 @@ func TestVisitedCachePersistence(t *testing.T) {
 	}
 	writeVisitedCache(t, cacheFile, initial)
 
-	r := &RAria2{urlCache: make(map[string]struct{}), VisitedCachePath: cacheFile}
+	r := &RAria2{urlCache: NewURLCache(""), VisitedCachePath: cacheFile}
 	assert.NoError(t, r.loadVisitedCache())
 
 	assert.False(t, r.markVisited(initial[0]))
@@ -704,7 +709,7 @@ func TestExecuteBatchDownloadDryRun(t *testing.T) {
 		DryRun:                 true,
 		MaxConnectionPerServer: 2,
 		MaxConcurrentDownload:  3,
-		urlCache:               make(map[string]struct{}),
+		urlCache:               NewURLCache(""),
 	}
 
 	entry := aria2URLEntry{URL: "https://example.com/file.bin", Dir: "out"}
@@ -765,7 +770,10 @@ func TestAria2SinkStreamsEntries(t *testing.T) {
 	}
 
 	r := &RAria2{MaxConnectionPerServer: 1, MaxConcurrentDownload: 1}
-	sink, err := newAria2Sink(context.Background(), r)
+	am := NewAria2Manager()
+	am.MaxConnectionPerServer = r.MaxConnectionPerServer
+	am.MaxConcurrentDownload = r.MaxConcurrentDownload
+	sink, err := newAria2Sink(context.Background(), am)
 	assert.NoError(t, err)
 
 	entry := aria2URLEntry{URL: "https://example.com/file.bin", Dir: "out"}
