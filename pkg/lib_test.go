@@ -155,6 +155,33 @@ func TestSubDownloadUrlsRecursivelyCrawlsFTPDirectory(t *testing.T) {
 	assert.Contains(t, urls, "ftp://example.com/root/sub/file2.bin")
 }
 
+func TestSubDownloadUrlsFTPSkipsFileTastingWithoutMimeFilters(t *testing.T) {
+	base := mustParseURL(t, "ftp://example.com/root/")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = -1
+
+	var fileListCalls int
+	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+		switch u.Path {
+		case "/root/", "/root":
+			return []ftpListingEntry{{name: "file1.bin"}, {name: "sub", isDir: true}}, nil
+		case "/root/sub/", "/root/sub":
+			return []ftpListingEntry{{name: "file2.bin"}}, nil
+		case "/root/file1.bin", "/root/sub/file2.bin":
+			fileListCalls++
+			return nil, errNotHTML
+		default:
+			return nil, errNotHTML
+		}
+	}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	assert.Equal(t, 0, fileListCalls)
+	assert.Len(t, r.downloadEntries, 2)
+}
+
 func TestSubDownloadUrlsRespectsFTPDepthLimit(t *testing.T) {
 	base := mustParseURL(t, "ftp://example.com/root/")
 	r := newTestClient(base)

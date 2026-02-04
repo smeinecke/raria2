@@ -320,6 +320,18 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		return
 	}
 
+	// For FTP(S) we can distinguish directories from files by the trailing slash added
+	// during listing. When no MIME validation is configured, avoid "tasting" files via
+	// additional FTP LIST calls and queue them for download directly.
+	if (parsedURL.Scheme == "ftp" || parsedURL.Scheme == "ftps") &&
+		entry.depth > 0 &&
+		!strings.HasSuffix(parsedURL.Path, "/") {
+		if len(filters.AcceptMime) == 0 && len(filters.RejectMime) == 0 {
+			r.downloadResource(workerId, cUrl)
+			return
+		}
+	}
+
 	newLinks, err := r.getLinksByUrlWithContext(ctx, cUrl)
 	if err != nil {
 		if errors.Is(err, errNotHTML) {
