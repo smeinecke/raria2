@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jlaffaye/ftp"
+	"github.com/sirupsen/logrus"
 )
 
 type ftpListingEntry struct {
@@ -71,7 +72,11 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Quit()
+	defer func() {
+		if quitErr := conn.Quit(); quitErr != nil {
+			logrus.WithError(quitErr).Debug("failed to close FTP connection")
+		}
+	}()
 
 	user := "anonymous"
 	pass := "anonymous"
