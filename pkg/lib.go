@@ -128,7 +128,7 @@ type RAria2 struct {
 	ftpList func(context.Context, *url.URL) ([]ftpListingEntry, error)
 
 	ftpConnMu    sync.Mutex
-	ftpConnCache map[string]*ftpConnEntry
+	ftpConnPools map[string]*ftpConnPool
 }
 
 func safeRelativeOutputPath(urlPath string) (string, bool) {

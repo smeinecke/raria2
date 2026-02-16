@@ -44,6 +44,17 @@ func (r *RAria2) getLinksByFTPWithContext(ctx context.Context, parsedURL *url.UR
 	return links, nil
 }
 
+func ftpList(ctx context.Context, conn *ftp.ServerConn, listPath string) ([]*ftp.Entry, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	entries, err := conn.List(listPath)
+	if err != nil && !strings.HasSuffix(listPath, "/") {
+		entries, err = conn.List(listPath + "/")
+	}
+	return entries, err
+}
+
 func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
 	if r.ftpList != nil {
 		return r.ftpList(ctx, u)
@@ -54,29 +65,28 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 		listPath = "/"
 	}
 
-	entry, err := r.ftpConnCacheGet(ctx, u)
+	pool, entry, err := r.ftpConnPoolGet(ctx, u)
 	if err != nil {
 		return nil, err
 	}
 
-	entry.mu.Lock()
-	entries, err := entry.list(ctx, listPath)
+	entries, err := ftpList(ctx, entry.conn, listPath)
 	if err != nil {
-		// Treat LIST failures as non-HTML like before, but try one reconnect first.
-		entry.closeLocked()
-		entry.mu.Unlock()
+		// Discard the broken connection and retry with a fresh one.
+		pool.discard(entry)
 
-		reEntry, reErr := r.ftpConnCacheGet(ctx, u)
+		pool2, entry2, reErr := r.ftpConnPoolGet(ctx, u)
 		if reErr != nil {
 			return nil, errNotHTML
 		}
-		reEntry.mu.Lock()
-		entries, err = reEntry.list(ctx, listPath)
-		reEntry.mu.Unlock()
-	}
-	entry.mu.Unlock()
-	if err != nil {
-		return nil, errNotHTML
+		entries, err = ftpList(ctx, entry2.conn, listPath)
+		if err != nil {
+			pool2.discard(entry2)
+			return nil, errNotHTML
+		}
+		pool2.put(entry2)
+	} else {
+		pool.put(entry)
 	}
 
 	if !strings.HasSuffix(u.Path, "/") {

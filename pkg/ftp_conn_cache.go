@@ -14,7 +14,6 @@ import (
 )
 
 type ftpConnEntry struct {
-	mu            sync.Mutex
 	conn          *ftp.ServerConn
 	lastUsed      time.Time
 	dialAddr      string
@@ -33,6 +32,138 @@ func (e *ftpConnEntry) logFields() logrus.Fields {
 		fields["implicit_tls"] = true
 	}
 	return fields
+}
+
+// ftpConnPool holds a pool of reusable FTP connections for a single server.
+// Connections are checked out by workers and returned after use, allowing
+// multiple workers to perform FTP operations concurrently.
+type ftpConnPool struct {
+	mu       sync.Mutex
+	conns    []*ftpConnEntry // idle connections
+	active   int             // number of checked-out connections
+	poolSize int
+
+	// connection template
+	dialAddr      string
+	dialOpts      []ftp.DialOption
+	user          string
+	pass          string
+	isImplicitTLS bool
+}
+
+func (p *ftpConnPool) logFields() logrus.Fields {
+	fields := logrus.Fields{
+		"addr": p.dialAddr,
+		"user": p.user,
+	}
+	if p.isImplicitTLS {
+		fields["implicit_tls"] = true
+	}
+	return fields
+}
+
+// get returns an idle connection from the pool, or creates a new one if the pool
+// has capacity. The returned connection is exclusively owned by the caller until
+// returned via put().
+func (p *ftpConnPool) get(ctx context.Context) (*ftpConnEntry, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	p.mu.Lock()
+	// Try to reuse an idle connection.
+	if len(p.conns) > 0 {
+		entry := p.conns[len(p.conns)-1]
+		p.conns = p.conns[:len(p.conns)-1]
+		p.active++
+		p.mu.Unlock()
+		entry.lastUsed = time.Now()
+		return entry, nil
+	}
+	p.active++
+	p.mu.Unlock()
+
+	// Create a new connection.
+	entry := &ftpConnEntry{
+		dialAddr:      p.dialAddr,
+		dialOpts:      p.dialOpts,
+		user:          p.user,
+		pass:          p.pass,
+		isImplicitTLS: p.isImplicitTLS,
+	}
+
+	if err := p.dial(ctx, entry); err != nil {
+		p.mu.Lock()
+		p.active--
+		p.mu.Unlock()
+		return nil, err
+	}
+
+	return entry, nil
+}
+
+// put returns a connection to the pool for reuse.
+func (p *ftpConnPool) put(entry *ftpConnEntry) {
+	if entry == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.active--
+	if entry.conn != nil {
+		p.conns = append(p.conns, entry)
+	}
+}
+
+// discard drops a broken connection without returning it to the pool.
+func (p *ftpConnPool) discard(entry *ftpConnEntry) {
+	if entry == nil {
+		return
+	}
+	if entry.conn != nil {
+		_ = entry.conn.Quit()
+		entry.conn = nil
+	}
+	p.mu.Lock()
+	p.active--
+	p.mu.Unlock()
+}
+
+func (p *ftpConnPool) dial(ctx context.Context, entry *ftpConnEntry) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	dialOpts := append([]ftp.DialOption{ftp.DialWithContext(ctx)}, entry.dialOpts...)
+	conn, err := ftp.Dial(entry.dialAddr, dialOpts...)
+	if err != nil {
+		return err
+	}
+	if err := conn.Login(entry.user, entry.pass); err != nil {
+		_ = conn.Quit()
+		return err
+	}
+	entry.conn = conn
+	entry.lastUsed = time.Now()
+	logrus.WithFields(entry.logFields()).Info("FTP connection established")
+	return nil
+}
+
+// closeAll closes all idle connections in the pool.
+func (p *ftpConnPool) closeAll() {
+	p.mu.Lock()
+	conns := p.conns
+	p.conns = nil
+	p.mu.Unlock()
+
+	for _, entry := range conns {
+		if entry.conn != nil {
+			logrus.WithFields(entry.logFields()).Info("FTP connection closed")
+			if err := entry.conn.Quit(); err != nil {
+				logrus.WithError(err).WithFields(entry.logFields()).Debug("failed to close FTP connection")
+			}
+			entry.conn = nil
+		}
+	}
 }
 
 func (r *RAria2) ftpConnKey(u *url.URL) (key string, addr string, user string, pass string, opts []ftp.DialOption, implicitTLS bool) {
@@ -70,86 +201,54 @@ func (r *RAria2) ftpConnKey(u *url.URL) (key string, addr string, user string, p
 	return key, addr, user, pass, opts, implicitTLS
 }
 
-func (r *RAria2) ftpConnCacheGet(ctx context.Context, u *url.URL) (*ftpConnEntry, error) {
+func (r *RAria2) ftpPoolSize() int {
+	if r.Threads > 0 {
+		return r.Threads
+	}
+	return 5
+}
+
+func (r *RAria2) ftpConnPoolGet(ctx context.Context, u *url.URL) (*ftpConnPool, *ftpConnEntry, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 
 	key, addr, user, pass, opts, implicitTLS := r.ftpConnKey(u)
 
 	r.ftpConnMu.Lock()
-	if r.ftpConnCache == nil {
-		r.ftpConnCache = make(map[string]*ftpConnEntry)
+	if r.ftpConnPools == nil {
+		r.ftpConnPools = make(map[string]*ftpConnPool)
 	}
-	entry := r.ftpConnCache[key]
-	if entry == nil {
-		entry = &ftpConnEntry{dialAddr: addr, dialOpts: opts, user: user, pass: pass, isImplicitTLS: implicitTLS}
-		r.ftpConnCache[key] = entry
+	pool := r.ftpConnPools[key]
+	if pool == nil {
+		pool = &ftpConnPool{
+			poolSize:      r.ftpPoolSize(),
+			dialAddr:      addr,
+			dialOpts:      opts,
+			user:          user,
+			pass:          pass,
+			isImplicitTLS: implicitTLS,
+		}
+		r.ftpConnPools[key] = pool
 	}
 	r.ftpConnMu.Unlock()
 
-	// Ensure the connection is established (or re-established) under entry lock.
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	entry.lastUsed = time.Now()
-
-	if entry.conn != nil {
-		return entry, nil
-	}
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-
-	// Dial supports context cancellation via option.
-	dialOpts := append([]ftp.DialOption{ftp.DialWithContext(ctx)}, entry.dialOpts...)
-	conn, err := ftp.Dial(entry.dialAddr, dialOpts...)
+	entry, err := pool.get(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := conn.Login(entry.user, entry.pass); err != nil {
-		_ = conn.Quit()
-		return nil, err
-	}
-	entry.conn = conn
-	logrus.WithFields(entry.logFields()).Info("FTP connection established")
-	return entry, nil
+	return pool, entry, nil
 }
 
 func (r *RAria2) ftpConnCacheCloseAll() {
 	r.ftpConnMu.Lock()
-	cache := r.ftpConnCache
-	r.ftpConnCache = nil
+	pools := r.ftpConnPools
+	r.ftpConnPools = nil
 	r.ftpConnMu.Unlock()
 
-	for _, entry := range cache {
-		if entry == nil {
-			continue
+	for _, pool := range pools {
+		if pool != nil {
+			pool.closeAll()
 		}
-		entry.mu.Lock()
-		entry.closeLocked()
-		entry.mu.Unlock()
 	}
-}
-
-func (e *ftpConnEntry) list(ctx context.Context, listPath string) ([]*ftp.Entry, error) {
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	entries, err := e.conn.List(listPath)
-	if err != nil && !strings.HasSuffix(listPath, "/") {
-		entries, err = e.conn.List(listPath + "/")
-	}
-	return entries, err
-}
-
-func (e *ftpConnEntry) closeLocked() {
-	if e.conn == nil {
-		return
-	}
-	logrus.WithFields(e.logFields()).Info("FTP connection closed")
-	if err := e.conn.Quit(); err != nil {
-		logrus.WithError(err).WithFields(e.logFields()).Debug("failed to close FTP connection")
-	}
-	e.conn = nil
 }
