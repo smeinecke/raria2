@@ -51,17 +51,6 @@ type ftpConnPool struct {
 	isImplicitTLS bool
 }
 
-func (p *ftpConnPool) logFields() logrus.Fields {
-	fields := logrus.Fields{
-		"addr": p.dialAddr,
-		"user": p.user,
-	}
-	if p.isImplicitTLS {
-		fields["implicit_tls"] = true
-	}
-	return fields
-}
-
 // get returns an idle connection from the pool, or creates a new one if the pool
 // has capacity. The returned connection is exclusively owned by the caller until
 // returned via put().
