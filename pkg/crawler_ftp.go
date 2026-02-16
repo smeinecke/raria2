@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jlaffaye/ftp"
+	"github.com/sirupsen/logrus"
 )
 
 type ftpListingEntry struct {
@@ -70,24 +71,36 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 		return nil, err
 	}
 
+	logger := logrus.WithFields(entry.logFields()).WithField("list_path", listPath)
+	logger.Debug("FTP LIST: requesting directory entries")
+
 	entries, err := ftpList(ctx, entry.conn, listPath)
 	if err != nil {
+		logger.WithError(err).Debug("FTP LIST: request failed; discarding connection")
 		// Discard the broken connection and retry with a fresh one.
 		pool.discard(entry)
 
 		pool2, entry2, reErr := r.ftpConnPoolGet(ctx, u)
 		if reErr != nil {
+			logger.WithError(reErr).Debug("FTP LIST: retry failed acquiring new connection")
 			return nil, errNotHTML
 		}
+
+		logger2 := logrus.WithFields(entry2.logFields()).WithField("list_path", listPath)
+		logger2.Debug("FTP LIST: retry requesting directory entries")
 		entries, err = ftpList(ctx, entry2.conn, listPath)
 		if err != nil {
+			logger2.WithError(err).Debug("FTP LIST: retry failed; discarding connection")
 			pool2.discard(entry2)
 			return nil, errNotHTML
 		}
+		logger2.WithField("entry_count", len(entries)).Debug("FTP LIST: retry succeeded")
 		pool2.put(entry2)
 	} else {
 		pool.put(entry)
 	}
+
+	logger.WithField("entry_count", len(entries)).Debug("FTP LIST: request succeeded")
 
 	if !strings.HasSuffix(u.Path, "/") {
 		base := path.Base(u.Path)

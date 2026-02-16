@@ -365,15 +365,13 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 	}
 
 	// For FTP(S) we can distinguish directories from files by the trailing slash added
-	// during listing. When no MIME validation is configured, avoid "tasting" files via
-	// additional FTP LIST calls and queue them for download directly.
+	// during listing. Skip per-file "tasting" LIST calls and queue discovered file
+	// URLs directly.
 	if (parsedURL.Scheme == "ftp" || parsedURL.Scheme == "ftps") &&
 		entry.depth > 0 &&
 		!strings.HasSuffix(parsedURL.Path, "/") {
-		if len(filters.AcceptMime) == 0 && len(filters.RejectMime) == 0 {
-			r.downloadResource(workerId, cUrl)
-			return
-		}
+		r.downloadResource(workerId, cUrl)
+		return
 	}
 
 	if (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") &&
@@ -401,19 +399,54 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		return
 	}
 
-	for _, link := range newLinks {
+	enqueueLink := func(link string) {
 		parsedLink, err := url.Parse(link)
 		if err != nil {
 			logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
-			continue
+			return
 		}
 		if !filters.PathAllowed(parsedLink) {
 			logrus.Debugf("path filters skipped %s", link)
-			continue
+			return
 		}
 		if !enqueue(crawlEntry{url: link, depth: nextDepth}) {
 			logrus.Debugf("skipping enqueue for %s due to context cancellation", link)
 		}
+	}
+
+	// For FTP(S), prioritize file URLs from a directory listing so downloads can
+	// be queued immediately while subdirectories are crawled afterward.
+	if parsedURL.Scheme == "ftp" || parsedURL.Scheme == "ftps" {
+		for _, link := range newLinks {
+			if strings.HasSuffix(link, "/") {
+				continue
+			}
+			parsedLink, err := url.Parse(link)
+			if err != nil {
+				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				continue
+			}
+			if !filters.PathAllowed(parsedLink) {
+				logrus.Debugf("path filters skipped %s", link)
+				continue
+			}
+			if !r.markVisited(link) {
+				logrus.WithField("url", link).Debug("skipping already visited")
+				continue
+			}
+			r.downloadResource(workerId, link)
+		}
+		for _, link := range newLinks {
+			if !strings.HasSuffix(link, "/") {
+				continue
+			}
+			enqueueLink(link)
+		}
+		return
+	}
+
+	for _, link := range newLinks {
+		enqueueLink(link)
 	}
 }
 
