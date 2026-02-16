@@ -155,12 +155,66 @@ func TestSubDownloadUrlsRecursivelyCrawlsFTPDirectory(t *testing.T) {
 	assert.Contains(t, urls, "ftp://example.com/root/sub/file2.bin")
 }
 
+func TestSubDownloadUrlsFTPQueuesFilesBeforeDirectories(t *testing.T) {
+	base := mustParseURL(t, "ftp://example.com/root/")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = -1
+	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+		switch u.Path {
+		case "/root/", "/root":
+			// Directory appears before file in listing; file should still be processed first.
+			return []ftpListingEntry{{name: "sub", isDir: true}, {name: "file1.bin"}}, nil
+		case "/root/sub/", "/root/sub":
+			return []ftpListingEntry{{name: "file2.bin"}}, nil
+		default:
+			return nil, errNotHTML
+		}
+	}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	if assert.Len(t, r.downloadEntries, 2) {
+		assert.Equal(t, "ftp://example.com/root/file1.bin", r.downloadEntries[0].URL)
+		assert.Equal(t, "ftp://example.com/root/sub/file2.bin", r.downloadEntries[1].URL)
+	}
+}
+
 func TestSubDownloadUrlsFTPSkipsFileTastingWithoutMimeFilters(t *testing.T) {
 	base := mustParseURL(t, "ftp://example.com/root/")
 	r := newTestClient(base)
 	r.OutputPath = tempDir(t)
 	r.urlCache = NewURLCache("")
 	r.MaxDepth = -1
+
+	var fileListCalls int
+	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+		switch u.Path {
+		case "/root/", "/root":
+			return []ftpListingEntry{{name: "file1.bin"}, {name: "sub", isDir: true}}, nil
+		case "/root/sub/", "/root/sub":
+			return []ftpListingEntry{{name: "file2.bin"}}, nil
+		case "/root/file1.bin", "/root/sub/file2.bin":
+			fileListCalls++
+			return nil, errNotHTML
+		default:
+			return nil, errNotHTML
+		}
+	}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	assert.Equal(t, 0, fileListCalls)
+	assert.Len(t, r.downloadEntries, 2)
+}
+
+func TestSubDownloadUrlsFTPSkipsFileTastingWithMimeFilters(t *testing.T) {
+	base := mustParseURL(t, "ftp://example.com/root/")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = -1
+	fm := r.FiltersConfig()
+	fm.AcceptMime = map[string]struct{}{"application/pdf": {}}
 
 	var fileListCalls int
 	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
