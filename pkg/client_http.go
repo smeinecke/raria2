@@ -2,11 +2,10 @@ package raria2
 
 import (
 	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,7 +15,8 @@ import (
 type HTTPClient struct {
 	client      *http.Client
 	rateLimit   float64
-	lastRequest int64 // Unix timestamp with nanoseconds
+	lastRequest time.Time
+	rateMu      sync.Mutex
 	retryCount  int
 	baseDelay   time.Duration
 }
@@ -91,30 +91,28 @@ func (c *HTTPClient) doWithRetry(req *http.Request, enableRetries bool) (*http.R
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-// waitForRateLimit implements rate limiting with proper handling of fractional rates
+// waitForRateLimit implements rate limiting with proper handling of fractional rates.
+// A mutex serializes the check-and-sleep so concurrent goroutines cannot bypass the
+// interval by reading the same lastRequest timestamp simultaneously.
 func (c *HTTPClient) waitForRateLimit() {
 	if c.rateLimit <= 0 {
 		return
 	}
 
-	now := time.Now().UnixNano()
-	last := atomic.LoadInt64(&c.lastRequest)
-
-	// Calculate minimum time between requests using float arithmetic
-	// This fixes the bug where fractional rates (<1 rps) would truncate to zero
 	minInterval := time.Duration(float64(time.Second) / c.rateLimit)
-
-	// Guard against zero or negative intervals (shouldn't happen with positive rateLimit)
 	if minInterval <= 0 {
 		return
 	}
 
-	if now-last < int64(minInterval) {
-		sleepTime := time.Duration(minInterval - time.Duration(now-last))
-		time.Sleep(sleepTime)
+	c.rateMu.Lock()
+	elapsed := time.Since(c.lastRequest)
+	if elapsed < minInterval {
+		c.rateMu.Unlock()
+		time.Sleep(minInterval - elapsed)
+		c.rateMu.Lock()
 	}
-
-	atomic.StoreInt64(&c.lastRequest, time.Now().UnixNano())
+	c.lastRequest = time.Now()
+	c.rateMu.Unlock()
 }
 
 // IsTransientError checks if an error is transient and worth retrying
@@ -143,78 +141,6 @@ func IsTransientError(err error) bool {
 	return false
 }
 
-// ContentTypeDetector handles content type detection
-type ContentTypeDetector struct {
-	client *HTTPClient
-}
-
-// NewContentTypeDetector creates a new content type detector
-func NewContentTypeDetector(client *HTTPClient) *ContentTypeDetector {
-	return &ContentTypeDetector{client: client}
-}
-
-// IsHTMLPage determines if a URL points to an HTML page
-func (d *ContentTypeDetector) IsHTMLPage(urlString, userAgent string) (bool, error) {
-	// First try HEAD request
-	req, err := http.NewRequest("HEAD", urlString, nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-
-	res, err := d.client.DoWithRetry(req)
-	if err != nil {
-		return false, err
-	}
-	defer res.Body.Close()
-
-	// If HEAD fails with 405/403 or missing Content-Type, fall back to GET
-	if res.StatusCode == 405 || res.StatusCode == 403 ||
-		res.Header.Get("Content-Type") == "" {
-
-		// Try GET with Range header first for efficiency
-		req, err = http.NewRequest("GET", urlString, nil)
-		if err != nil {
-			return false, err
-		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Range", "bytes=0-1023")
-		res, err = d.client.DoWithRetry(req)
-		if err != nil {
-			return false, err
-		}
-		defer res.Body.Close()
-
-		// If Range not supported, read first 1KB normally
-		if res.StatusCode == 416 || res.StatusCode == 400 {
-			req, err = http.NewRequest("GET", urlString, nil)
-			if err != nil {
-				return false, err
-			}
-			req.Header.Set("User-Agent", userAgent)
-			res, err = d.client.DoWithRetry(req)
-			if err != nil {
-				return false, err
-			}
-			defer res.Body.Close()
-		}
-
-		// For successful GET (either Range or full), read first 1KB to detect content type
-		if res.StatusCode >= 200 && res.StatusCode < 300 {
-			limitReader := io.LimitReader(res.Body, 1024)
-			bodyBytes, _ := io.ReadAll(limitReader)
-			contentType := http.DetectContentType(bodyBytes)
-			return IsHTMLContent(contentType), nil
-		}
-	}
-
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return false, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
-	}
-
-	return IsHTMLContent(res.Header.Get("Content-Type")), nil
-}
-
 // IsHTMLContent checks if content type indicates HTML
 func IsHTMLContent(contentType string) bool {
 	contentTypeEntries := strings.Split(contentType, ";")
@@ -227,15 +153,15 @@ func IsHTMLContent(contentType string) bool {
 }
 
 func (r *RAria2) client() *HTTPClient {
-	if r.httpClient != nil {
-		return r.httpClient
-	}
-
-	timeout := r.HTTPTimeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-
-	r.httpClient = NewHTTPClient(timeout, r.RateLimit)
+	r.httpClientOnce.Do(func() {
+		if r.httpClient != nil {
+			return
+		}
+		timeout := r.HTTPTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		r.httpClient = NewHTTPClient(timeout, r.RateLimit)
+	})
 	return r.httpClient
 }

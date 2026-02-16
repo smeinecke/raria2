@@ -54,23 +54,18 @@ func (uc *URLCache) Load() error {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	var entries []string
+	uc.cacheMu.Lock()
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		entries = append(entries, line)
+		uc.cache[canonicalURL(line)] = struct{}{}
 	}
+	uc.cacheMu.Unlock()
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-
-	uc.cacheMu.Lock()
-	for _, entry := range entries {
-		uc.cache[canonicalURL(entry)] = struct{}{}
-	}
-	uc.cacheMu.Unlock()
 
 	return nil
 }
