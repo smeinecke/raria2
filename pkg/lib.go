@@ -103,6 +103,7 @@ type RAria2 struct {
 	RespectRobots          bool
 	Filters                *FilterManager
 	httpClient             *HTTPClient
+	httpClientOnce         sync.Once
 
 	downloadEntries   []aria2URLEntry
 	downloadEntriesMu sync.Mutex
@@ -542,9 +543,10 @@ func (r *RAria2) ensureOutputDir(workerId int, dir string) error {
 
 func (r *RAria2) enqueueDownloadEntry(entry aria2URLEntry) {
 	r.downloadEntriesMu.Lock()
-	defer r.downloadEntriesMu.Unlock()
 	r.downloadEntries = append(r.downloadEntries, entry)
-	if ch := r.downloadEntriesCh; ch != nil {
+	ch := r.downloadEntriesCh
+	r.downloadEntriesMu.Unlock()
+	if ch != nil {
 		ch <- entry
 	}
 }

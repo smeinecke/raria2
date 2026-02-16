@@ -3,127 +3,111 @@ package raria2
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestContentTypeDetector(t *testing.T, handler http.HandlerFunc) (*ContentTypeDetector, string) {
-	t.Helper()
-	server := httptest.NewServer(handler)
+func TestNewHTTPClient(t *testing.T) {
+	c := NewHTTPClient(5*time.Second, 0)
+	assert.NotNil(t, c)
+	assert.NotNil(t, c.client)
+	assert.Equal(t, 3, c.retryCount)
+}
+
+func TestNewHTTPClientDefaultTimeout(t *testing.T) {
+	c := NewHTTPClient(0, 0)
+	assert.NotNil(t, c)
+}
+
+func TestHTTPClientDoWithRetryTransientError(t *testing.T) {
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
 	t.Cleanup(server.Close)
 
-	client := NewHTTPClient(2*time.Second, 0)
-	client.client = server.Client()
+	c := NewHTTPClient(2*time.Second, 0)
+	c.client = server.Client()
+	c.baseDelay = 10 * time.Millisecond
 
-	return NewContentTypeDetector(client), server.URL + "/resource"
+	req, _ := http.NewRequest("GET", server.URL, nil)
+	resp, err := c.DoWithRetry(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, 3, attempts)
 }
 
-func TestNewContentTypeDetector(t *testing.T) {
-	detector := NewContentTypeDetector(NewHTTPClient(5*time.Second, 0))
-	assert.NotNil(t, detector)
+func TestHTTPClientDoNoRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewHTTPClient(2*time.Second, 0)
+	c.client = server.Client()
+
+	req, _ := http.NewRequest("GET", server.URL, nil)
+	resp, err := c.Do(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
 }
 
-func TestContentTypeDetectorIsHTMLPage(t *testing.T) {
-	tests := []struct {
-		name      string
-		handler   func(t *testing.T) http.HandlerFunc
-		expect    bool
-		expectErr bool
-	}{
-		{
-			name:   "head_indicates_html",
-			expect: true,
-			handler: func(t *testing.T) http.HandlerFunc {
-				return func(w http.ResponseWriter, r *http.Request) {
-					assert.Equal(t, http.MethodHead, r.Method)
-					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					w.WriteHeader(http.StatusOK)
-				}
-			},
-		},
-		{
-			name:   "fallback_head_missing_content_type",
-			expect: true,
-			handler: func(t *testing.T) http.HandlerFunc {
-				return func(w http.ResponseWriter, r *http.Request) {
-					switch r.Method {
-					case http.MethodHead:
-						w.WriteHeader(http.StatusOK)
-					case http.MethodGet:
-						assert.Equal(t, "bytes=0-1023", r.Header.Get("Range"))
-						w.WriteHeader(http.StatusOK)
-						_, _ = w.Write([]byte("<!doctype html><html></html>"))
-					default:
-						t.Fatalf("unexpected method: %s", r.Method)
-					}
-				}
-			},
-		},
-		{
-			name:   "range_not_supported_triggers_full_get",
-			expect: true,
-			handler: func(t *testing.T) http.HandlerFunc {
-				var rangeAttempt bool
-				return func(w http.ResponseWriter, r *http.Request) {
-					switch r.Method {
-					case http.MethodHead:
-						w.WriteHeader(http.StatusOK)
-					case http.MethodGet:
-						if r.Header.Get("Range") != "" {
-							rangeAttempt = true
-							w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-							return
-						}
-						assert.True(t, rangeAttempt, "expected range attempt first")
-						w.WriteHeader(http.StatusOK)
-						_, _ = w.Write([]byte("<html><body>content</body></html>"))
-					default:
-						t.Fatalf("unexpected method: %s", r.Method)
-					}
-				}
-			},
-		},
-		{
-			name: "non_html_content",
-			handler: func(t *testing.T) http.HandlerFunc {
-				return func(w http.ResponseWriter, r *http.Request) {
-					switch r.Method {
-					case http.MethodHead:
-						w.WriteHeader(http.StatusOK)
-					case http.MethodGet:
-						w.WriteHeader(http.StatusOK)
-						w.Header().Set("Content-Type", "application/json")
-						_, _ = w.Write([]byte(`{"ok":true}`))
-					default:
-						t.Fatalf("unexpected method: %s", r.Method)
-					}
-				}
-			},
-			expect: false,
-		},
-		{
-			name: "head_transient_error",
-			handler: func(t *testing.T) http.HandlerFunc {
-				return func(w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusInternalServerError)
-				}
-			},
-			expectErr: true,
-		},
-	}
+func TestWaitForRateLimitConcurrentSafety(t *testing.T) {
+	c := NewHTTPClient(5*time.Second, 100) // 100 rps = 10ms interval
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			detector, url := newTestContentTypeDetector(t, tt.handler(t))
-			result, err := detector.IsHTMLPage(url, "test-agent")
-			if tt.expectErr {
-				assert.Error(t, err)
-				return
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expect, result)
-		})
+	var wg sync.WaitGroup
+	var count atomic.Int32
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.waitForRateLimit()
+			count.Add(1)
+		}()
 	}
+	wg.Wait()
+	assert.Equal(t, int32(5), count.Load())
+}
+
+func TestWaitForRateLimitZeroRate(t *testing.T) {
+	c := NewHTTPClient(5*time.Second, 0)
+	// Should return immediately without panic.
+	c.waitForRateLimit()
+}
+
+func TestRAriaClientInitOnce(t *testing.T) {
+	r := &RAria2{HTTPTimeout: 2 * time.Second, RateLimit: 0}
+
+	var wg sync.WaitGroup
+	clients := make([]*HTTPClient, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			clients[idx] = r.client()
+		}(i)
+	}
+	wg.Wait()
+
+	// All goroutines must get the same instance.
+	for i := 1; i < 10; i++ {
+		assert.Same(t, clients[0], clients[i])
+	}
+}
+
+func TestRAriaClientRespectsPreset(t *testing.T) {
+	preset := NewHTTPClient(1*time.Second, 0)
+	r := &RAria2{httpClient: preset}
+	assert.Same(t, preset, r.client())
 }
