@@ -298,6 +298,57 @@ func TestGlobToRegex(t *testing.T) {
 	}
 }
 
+func TestHasAria2CheckCertificateDisabled(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "empty args",
+			args: nil,
+			want: false,
+		},
+		{
+			name: "unrelated args",
+			args: []string{"--max-download-limit=1M"},
+			want: false,
+		},
+		{
+			name: "check certificate false with equals",
+			args: []string{"--check-certificate=false"},
+			want: true,
+		},
+		{
+			name: "check certificate false as two args",
+			args: []string{"--check-certificate", "false"},
+			want: true,
+		},
+		{
+			name: "check certificate true",
+			args: []string{"--check-certificate=true"},
+			want: false,
+		},
+		{
+			name: "check certificate split true",
+			args: []string{"--check-certificate", "true"},
+			want: false,
+		},
+		{
+			name: "mixed args includes false",
+			args: []string{"--foo=1", "--check-certificate=false", "--bar=2"},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasAria2CheckCertificateDisabled(tt.args)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSplitAndTrim(t *testing.T) {
 	tests := []struct {
 		name     string

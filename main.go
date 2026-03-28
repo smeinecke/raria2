@@ -147,6 +147,7 @@ func run(opts *cliOptions) error {
 	client.RespectRobots = opts.RespectRobots
 	client.VisitedCachePath = opts.VisitedCachePath
 	client.WriteBatch = opts.WriteBatch
+	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(opts.Aria2Args)
 
 	if err := setPositiveValue("--max-connection-per-server", opts.MaxConnectionPerServer); err != nil {
 		return err
@@ -321,4 +322,25 @@ func splitAndTrim(values []string) []string {
 		}
 	}
 	return result
+}
+
+func hasAria2CheckCertificateDisabled(aria2Args []string) bool {
+	for i := 0; i < len(aria2Args); i++ {
+		arg := strings.TrimSpace(aria2Args[i])
+		if arg == "" {
+			continue
+		}
+
+		lowerArg := strings.ToLower(arg)
+		if lowerArg == "--check-certificate=false" {
+			return true
+		}
+		if lowerArg == "--check-certificate" && i+1 < len(aria2Args) {
+			next := strings.ToLower(strings.TrimSpace(aria2Args[i+1]))
+			if next == "false" {
+				return true
+			}
+		}
+	}
+	return false
 }
