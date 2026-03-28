@@ -33,8 +33,8 @@ jobs:
 
       - name: Run CI
         run: make ci
-        if: matrix.go-version == '1.24.13'
+        if: matrix.go-version == '1.25.x'
 
       - name: Run tests (compatibility check)
         run: make test
-        if: matrix.go-version == '1.25.x'
+        if: matrix.go-version == '1.24.13'
