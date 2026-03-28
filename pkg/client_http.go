@@ -1,6 +1,7 @@
 package raria2
 
 import (
+	"crypto/tls"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -162,6 +163,17 @@ func (r *RAria2) client() *HTTPClient {
 			timeout = 30 * time.Second
 		}
 		r.httpClient = NewHTTPClient(timeout, r.RateLimit)
+		if r.SkipCertificateCheck {
+			baseTransport, ok := http.DefaultTransport.(*http.Transport)
+			var transport *http.Transport
+			if ok {
+				transport = baseTransport.Clone()
+			} else {
+				transport = &http.Transport{}
+			}
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			r.httpClient.client.Transport = transport
+		}
 	})
 	return r.httpClient
 }

@@ -111,3 +111,25 @@ func TestRAriaClientRespectsPreset(t *testing.T) {
 	r := &RAria2{httpClient: preset}
 	assert.Same(t, preset, r.client())
 }
+
+func TestRAriaClientSkipCertificateCheck(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	// Default behavior should fail TLS verification against self-signed certs.
+	defaultClient := &RAria2{HTTPTimeout: 2 * time.Second}
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	_, err := defaultClient.client().Do(req)
+	assert.Error(t, err)
+
+	// When explicitly disabled, TLS verification should be skipped.
+	insecureClient := &RAria2{HTTPTimeout: 2 * time.Second, SkipCertificateCheck: true}
+	reqInsecure, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := insecureClient.client().Do(reqInsecure)
+	assert.NoError(t, err)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+}

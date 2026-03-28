@@ -98,6 +98,7 @@ type RAria2 struct {
 	HTTPTimeout            time.Duration
 	UserAgent              string
 	RateLimit              float64
+	SkipCertificateCheck   bool
 	VisitedCachePath       string
 	WriteBatch             string
 	RespectRobots          bool

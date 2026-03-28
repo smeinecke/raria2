@@ -99,6 +99,9 @@ raria2 --accept-mime 'application/pdf,image/jpeg,image/png' 'https://example.com
 
 # Exclude binary executables and archives
 raria2 --reject-mime 'application/octet-stream,application/x-executable,application/zip' 'https://example.com/pub/'
+
+# Skip TLS certificate verification (applies to both crawler checks and aria2 downloads)
+raria2 'https://example.com/pub/' -- --check-certificate=false
 ```
 
 ## Aria2 stdin bug workaround

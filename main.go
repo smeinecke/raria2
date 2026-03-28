@@ -79,6 +79,7 @@ func main() {
 	client := raria2.New(parsedUrl)
 	client.OutputPath = args.Output
 	client.Aria2AfterURLArgs = args.Aria2Args
+	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(args.Aria2Args)
 	client.DryRun = args.DryRun
 	client.HTTPTimeout = args.HTTPTimeout
 	client.UserAgent = args.UserAgent
@@ -260,4 +261,25 @@ func splitAndTrim(values []string) []string {
 		}
 	}
 	return result
+}
+
+func hasAria2CheckCertificateDisabled(aria2Args []string) bool {
+	for i := 0; i < len(aria2Args); i++ {
+		arg := strings.TrimSpace(aria2Args[i])
+		if arg == "" {
+			continue
+		}
+
+		lowerArg := strings.ToLower(arg)
+		if lowerArg == "--check-certificate=false" {
+			return true
+		}
+		if lowerArg == "--check-certificate" && i+1 < len(aria2Args) {
+			next := strings.ToLower(strings.TrimSpace(aria2Args[i+1]))
+			if next == "false" {
+				return true
+			}
+		}
+	}
+	return false
 }
