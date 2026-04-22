@@ -1,6 +1,7 @@
 package raria2
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,8 +14,12 @@ import (
 )
 
 func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
+	return r.IsHtmlPageWithContext(context.Background(), urlString)
+}
+
+func (r *RAria2) IsHtmlPageWithContext(ctx context.Context, urlString string) (bool, error) {
 	// First try HEAD request
-	req, err := http.NewRequest("HEAD", urlString, nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", urlString, nil)
 	if err != nil {
 		return false, err
 	}
@@ -36,7 +41,7 @@ func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
 		res.Header.Get("Content-Type") == "" {
 
 		// Try GET with Range header first for efficiency
-		req, err = http.NewRequest("GET", urlString, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", urlString, nil)
 		if err != nil {
 			return false, err
 		}
@@ -54,7 +59,7 @@ func (r *RAria2) IsHtmlPage(urlString string) (bool, error) {
 
 		// If Range not supported, read first 1KB normally
 		if res.StatusCode == 416 || res.StatusCode == 400 {
-			req, err = http.NewRequest("GET", urlString, nil)
+			req, err = http.NewRequestWithContext(ctx, "GET", urlString, nil)
 			if err != nil {
 				return false, err
 			}
@@ -104,15 +109,7 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		return nil, errNotHTML
 	}
 
-	isHTML, err := r.IsHtmlPage(urlString)
-	if err != nil {
-		return nil, err
-	}
-	if !isHTML {
-		return nil, errNotHTML
-	}
-
-	// It's HTML, so do a full GET to parse links
+	// Fetch once and either parse links or classify as non-HTML from that response.
 	req, err := http.NewRequestWithContext(ctx, "GET", urlString, nil)
 	if err != nil {
 		return nil, err
@@ -135,7 +132,24 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		return nil, fmt.Errorf("unexpected status code %d for %s", res.StatusCode, urlString)
 	}
 
-	return getLinks(parsedUrl, res.Body)
+	contentType := res.Header.Get("Content-Type")
+	if contentType != "" {
+		if !IsHTMLContent(contentType) {
+			return nil, errNotHTML
+		}
+		return getLinks(parsedUrl, res.Body)
+	}
+
+	// No explicit content-type: sniff prefix and keep stream readable for parser.
+	prefix, err := io.ReadAll(io.LimitReader(res.Body, 1024))
+	if err != nil {
+		return nil, err
+	}
+	if !IsHTMLContent(http.DetectContentType(prefix)) {
+		return nil, errNotHTML
+	}
+
+	return getLinks(parsedUrl, io.NopCloser(io.MultiReader(bytes.NewReader(prefix), res.Body)))
 }
 
 func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
