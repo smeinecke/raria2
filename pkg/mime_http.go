@@ -6,10 +6,6 @@ import (
 	"net/http"
 )
 
-func (r *RAria2) sniffHTTPContentType(workerId int, cUrl string) (string, bool) {
-	return r.sniffHTTPContentTypeWithContext(context.Background(), workerId, cUrl)
-}
-
 func (r *RAria2) sniffHTTPContentTypeWithContext(ctx context.Context, workerId int, cUrl string) (string, bool) {
 	contentType := ""
 	req, err := http.NewRequestWithContext(ctx, "HEAD", cUrl, nil)
