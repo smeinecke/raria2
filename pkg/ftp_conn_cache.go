@@ -42,6 +42,8 @@ type ftpConnPool struct {
 	conns    []*ftpConnEntry // idle connections
 	active   int             // number of checked-out connections
 	poolSize int
+	tokenSem chan struct{}
+	tokenMu  sync.Mutex
 
 	// connection template
 	dialAddr      string
@@ -51,12 +53,53 @@ type ftpConnPool struct {
 	isImplicitTLS bool
 }
 
+func (p *ftpConnPool) ensureTokenSem() chan struct{} {
+	p.tokenMu.Lock()
+	defer p.tokenMu.Unlock()
+
+	if p.tokenSem != nil {
+		return p.tokenSem
+	}
+
+	size := p.poolSize
+	if size <= 0 {
+		size = 1
+	}
+	p.tokenSem = make(chan struct{}, size)
+	for i := 0; i < size; i++ {
+		p.tokenSem <- struct{}{}
+	}
+
+	return p.tokenSem
+}
+
+func (p *ftpConnPool) acquireToken(ctx context.Context) error {
+	sem := p.ensureTokenSem()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-sem:
+		return nil
+	}
+}
+
+func (p *ftpConnPool) releaseToken() {
+	sem := p.ensureTokenSem()
+	select {
+	case sem <- struct{}{}:
+	default:
+	}
+}
+
 // get returns an idle connection from the pool, or creates a new one if the pool
 // has capacity. The returned connection is exclusively owned by the caller until
 // returned via put().
 func (p *ftpConnPool) get(ctx context.Context) (*ftpConnEntry, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if err := p.acquireToken(ctx); err != nil {
+		return nil, err
 	}
 
 	p.mu.Lock()
@@ -85,6 +128,7 @@ func (p *ftpConnPool) get(ctx context.Context) (*ftpConnEntry, error) {
 		p.mu.Lock()
 		p.active--
 		p.mu.Unlock()
+		p.releaseToken()
 		return nil, err
 	}
 
@@ -102,6 +146,7 @@ func (p *ftpConnPool) put(entry *ftpConnEntry) {
 	if entry.conn != nil {
 		p.conns = append(p.conns, entry)
 	}
+	p.releaseToken()
 }
 
 // discard drops a broken connection without returning it to the pool.
@@ -116,6 +161,7 @@ func (p *ftpConnPool) discard(entry *ftpConnEntry) {
 	p.mu.Lock()
 	p.active--
 	p.mu.Unlock()
+	p.releaseToken()
 }
 
 func (p *ftpConnPool) dial(ctx context.Context, entry *ftpConnEntry) error {

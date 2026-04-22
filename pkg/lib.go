@@ -371,7 +371,7 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 	if (parsedURL.Scheme == "ftp" || parsedURL.Scheme == "ftps") &&
 		entry.depth > 0 &&
 		!strings.HasSuffix(parsedURL.Path, "/") {
-		r.downloadResource(workerId, cUrl)
+		r.downloadResourceWithContext(ctx, workerId, cUrl)
 		return
 	}
 
@@ -381,14 +381,14 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		parsedURL.RawQuery == "" &&
 		!strings.HasSuffix(parsedURL.Path, "/") &&
 		isLikelyHTTPFilePath(parsedURL.Path) {
-		r.downloadResource(workerId, cUrl)
+		r.downloadResourceWithContext(ctx, workerId, cUrl)
 		return
 	}
 
 	newLinks, err := r.getLinksByUrlWithContext(ctx, cUrl)
 	if err != nil {
 		if errors.Is(err, errNotHTML) {
-			r.downloadResource(workerId, cUrl)
+			r.downloadResourceWithContext(ctx, workerId, cUrl)
 			return
 		}
 		logrus.Warnf("unable to fetch %v: %v", cUrl, err)
@@ -435,7 +435,7 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 				logrus.WithField("url", link).Debug("skipping already visited")
 				continue
 			}
-			r.downloadResource(workerId, link)
+			r.downloadResourceWithContext(ctx, workerId, link)
 		}
 		for _, link := range newLinks {
 			if !strings.HasSuffix(link, "/") {
@@ -452,6 +452,10 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 }
 
 func (r *RAria2) downloadResource(workerId int, cUrl string) {
+	r.downloadResourceWithContext(context.Background(), workerId, cUrl)
+}
+
+func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, cUrl string) {
 	parsedCUrl, err := url.Parse(cUrl)
 	if err != nil {
 		logrus.Warnf("[W %d]: unable to download %v because it's an invalid URL: %v", workerId, cUrl, err)
@@ -479,7 +483,7 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 		if !isHTTP {
 			logrus.Debugf("[W %d]: skipping MIME filtering for non-HTTP(S) URL %s", workerId, cUrl)
 		} else {
-			contentType, ok := r.sniffHTTPContentType(workerId, cUrl)
+			contentType, ok := r.sniffHTTPContentTypeWithContext(ctx, workerId, cUrl)
 			if !ok {
 				return
 			}

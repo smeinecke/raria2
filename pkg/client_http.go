@@ -106,14 +106,16 @@ func (c *HTTPClient) waitForRateLimit() {
 	}
 
 	c.rateMu.Lock()
-	elapsed := time.Since(c.lastRequest)
-	if elapsed < minInterval {
-		c.rateMu.Unlock()
-		time.Sleep(minInterval - elapsed)
-		c.rateMu.Lock()
+	defer c.rateMu.Unlock()
+
+	now := time.Now()
+	if !c.lastRequest.IsZero() {
+		nextAllowed := c.lastRequest.Add(minInterval)
+		if now.Before(nextAllowed) {
+			time.Sleep(nextAllowed.Sub(now))
+		}
 	}
 	c.lastRequest = time.Now()
-	c.rateMu.Unlock()
 }
 
 // IsTransientError checks if an error is transient and worth retrying

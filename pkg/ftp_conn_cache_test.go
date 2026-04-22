@@ -184,6 +184,26 @@ func TestFtpConnPoolGetContextCancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestFtpConnPoolGetHonorsPoolSize(t *testing.T) {
+	pool := &ftpConnPool{
+		poolSize: 1,
+		dialAddr: "example.com:21",
+	}
+	pool.conns = []*ftpConnEntry{{dialAddr: "example.com:21", conn: &stubFTPConn}}
+
+	first, err := pool.get(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, first)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	second, err := pool.get(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, second)
+
+	pool.put(first)
+}
+
 func TestFtpConnCacheCloseAllEmpty(t *testing.T) {
 	r := &RAria2{}
 	// Should not panic on nil pool map.

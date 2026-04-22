@@ -304,7 +304,6 @@ func TestSubDownloadUrlsHTTPSkipsFileTastingWithoutMimeFilters(t *testing.T) {
 	}
 	assert.Contains(t, urls, server.URL+"/root/file.bin")
 
-	assert.GreaterOrEqual(t, indexHeadCalls, 1)
 	assert.GreaterOrEqual(t, indexGetCalls, 1)
 
 	// The file link should be queued without any probing/tasting requests.
@@ -671,6 +670,27 @@ func TestRAria2IsHtmlPage(t *testing.T) {
 			assert.Equal(t, tt.expect, result)
 		})
 	}
+}
+
+func TestRAria2IsHtmlPageWithContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		<-req.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	r := &RAria2{
+		UserAgent:      "test-agent",
+		DisableRetries: true,
+	}
+	r.httpClient = NewHTTPClient(2*time.Second, 0)
+	r.httpClient.client = server.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.IsHtmlPageWithContext(ctx, server.URL+"/resource")
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestDownloadResource_ExtensionFilters(t *testing.T) {

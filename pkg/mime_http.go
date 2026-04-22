@@ -1,13 +1,18 @@
 package raria2
 
 import (
+	"context"
 	"io"
 	"net/http"
 )
 
 func (r *RAria2) sniffHTTPContentType(workerId int, cUrl string) (string, bool) {
+	return r.sniffHTTPContentTypeWithContext(context.Background(), workerId, cUrl)
+}
+
+func (r *RAria2) sniffHTTPContentTypeWithContext(ctx context.Context, workerId int, cUrl string) (string, bool) {
 	contentType := ""
-	req, err := http.NewRequest("HEAD", cUrl, nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", cUrl, nil)
 	if err == nil {
 		req.Header.Set("User-Agent", r.UserAgent)
 		var res *http.Response
@@ -26,7 +31,7 @@ func (r *RAria2) sniffHTTPContentType(workerId int, cUrl string) (string, bool) 
 
 	// If HEAD failed or did not provide a usable content-type, sniff via a small GET.
 	if contentType == "" {
-		sniffReq, reqErr := http.NewRequest("GET", cUrl, nil)
+		sniffReq, reqErr := http.NewRequestWithContext(ctx, "GET", cUrl, nil)
 		if reqErr != nil {
 			return "", false
 		}
