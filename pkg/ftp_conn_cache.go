@@ -2,7 +2,9 @@ package raria2
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"net"
 	"net/url"
 	"strings"
@@ -228,11 +230,17 @@ func (r *RAria2) ftpConnKey(u *url.URL) (key string, addr string, user string, p
 
 	opts = []ftp.DialOption{ftp.DialWithTimeout(r.HTTPTimeout)}
 	if implicitTLS {
-		opts = append(opts, ftp.DialWithTLS(&tls.Config{ServerName: host}))
+		tlsCfg := &tls.Config{ServerName: host}
+		if r.SkipCertificateCheck {
+			tlsCfg.InsecureSkipVerify = true
+		}
+		opts = append(opts, ftp.DialWithTLS(tlsCfg))
 	}
 
 	// Include credentials in key: many servers apply different permissions per login.
-	key = strings.ToLower(u.Scheme) + "://" + addr + "|" + user + ":" + pass
+	// Hash the password so it does not appear in plaintext on the heap.
+	passHash := sha256.Sum256([]byte(pass))
+	key = strings.ToLower(u.Scheme) + "://" + addr + "|" + user + ":" + hex.EncodeToString(passHash[:])[:16]
 	return key, addr, user, pass, opts, implicitTLS
 }
 

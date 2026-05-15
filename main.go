@@ -123,6 +123,10 @@ func run(opts *cliOptions) error {
 	if err != nil {
 		return fmt.Errorf("invalid URL provided: %w", err)
 	}
+	scheme := strings.ToLower(parsedURL.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "ftp" && scheme != "ftps" {
+		return fmt.Errorf("unsupported URL scheme %q (expected http, https, ftp, or ftps)", parsedURL.Scheme)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -141,6 +145,9 @@ func run(opts *cliOptions) error {
 	client.Aria2AfterURLArgs = opts.Aria2Args
 	client.DryRun = opts.DryRun
 	client.HTTPTimeout = opts.HTTPTimeout
+	if strings.ContainsAny(opts.UserAgent, "\r\n") {
+		return fmt.Errorf("invalid user-agent: contains newline characters")
+	}
 	client.UserAgent = opts.UserAgent
 	client.RateLimit = opts.RateLimit
 	client.MaxDepth = opts.MaxDepth

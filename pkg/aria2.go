@@ -31,6 +31,7 @@ type Aria2Manager struct {
 	DryRun                 bool
 	Aria2AfterURLArgs      []string
 	WriteBatch             string
+	SkipCertificateCheck   bool
 	sinkFactory            func(context.Context, *RAria2) (downloadSink, error)
 }
 
@@ -141,6 +142,10 @@ func newAria2Sink(ctx context.Context, am *Aria2Manager) (downloadSink, error) {
 		args = append(args, "--dry-run=true")
 	}
 
+	if am.SkipCertificateCheck {
+		args = append(args, "--check-certificate=false")
+	}
+
 	if len(am.Aria2AfterURLArgs) > 0 {
 		args = append(args, am.Aria2AfterURLArgs...)
 	}
@@ -162,14 +167,21 @@ func newAria2Sink(ctx context.Context, am *Aria2Manager) (downloadSink, error) {
 	}
 
 	waitCh := make(chan error, 1)
+	processDone := make(chan struct{})
 	go func() {
 		waitCh <- cmd.Wait()
+		close(processDone)
 	}()
 
 	if ctx != nil {
 		go func() {
-			<-ctx.Done()
-			_ = cmd.Process.Kill()
+			select {
+			case <-ctx.Done():
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			case <-processDone:
+			}
 		}()
 	}
 
@@ -242,8 +254,20 @@ func (s *batchFileSink) Close() error {
 	return s.closeErr
 }
 
+func containsControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 {
+			return true
+		}
+	}
+	return false
+}
+
 // writeBatchEntry writes a single entry to the batch writer
 func writeBatchEntry(writer *bufio.Writer, entry aria2URLEntry) error {
+	if containsControlChar(entry.URL) || containsControlChar(entry.Dir) {
+		return fmt.Errorf("batch entry contains control characters")
+	}
 	if _, err := fmt.Fprintln(writer, entry.URL); err != nil {
 		return err
 	}

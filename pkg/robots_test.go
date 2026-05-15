@@ -1,6 +1,7 @@
 package raria2
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -108,12 +109,12 @@ func TestUrlAllowedByRobots(t *testing.T) {
 
 				// Test the URL with the same protocol as the server
 				testURL, _ = url.Parse(server.URL + tt.testPath)
-				result := r.urlAllowedByRobots(testURL)
+				result := r.urlAllowedByRobots(context.Background(), testURL)
 				assert.Equal(t, tt.expected, result)
 			} else {
 				// When robots is disabled, should always return true
 				testURL, _ := url.Parse("https://example.com" + tt.testPath)
-				result := r.urlAllowedByRobots(testURL)
+				result := r.urlAllowedByRobots(context.Background(), testURL)
 				assert.Equal(t, tt.expected, result)
 			}
 		})
@@ -180,7 +181,7 @@ func TestGetRobotsData(t *testing.T) {
 			host := strings.TrimPrefix(server.URL, "http://")
 			host = strings.TrimPrefix(host, "https://")
 
-			robots, err := r.getRobotsData(host)
+			robots, err := r.getRobotsData(context.Background(), "http", host)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -211,7 +212,7 @@ func TestCacheRobotsData(t *testing.T) {
 	assert.Equal(t, robotsData, cached)
 
 	// Test that subsequent calls use cache
-	robots, err := r.getRobotsData("example.com")
+	robots, err := r.getRobotsData(context.Background(), "https", "example.com")
 	assert.NoError(t, err)
 	assert.Equal(t, robotsData, robots)
 }
@@ -241,7 +242,7 @@ func TestUrlAllowedByRobots_Caching(t *testing.T) {
 
 	// First call should fetch from server
 	testURL, _ := url.Parse(server.URL + "/private")
-	result1 := r.urlAllowedByRobots(testURL)
+	result1 := r.urlAllowedByRobots(context.Background(), testURL)
 	assert.False(t, result1)
 
 	// Verify robots data was cached
@@ -251,6 +252,6 @@ func TestUrlAllowedByRobots_Caching(t *testing.T) {
 	assert.True(t, exists)
 
 	// Second call should use cache
-	result2 := r.urlAllowedByRobots(testURL)
+	result2 := r.urlAllowedByRobots(context.Background(), testURL)
 	assert.False(t, result2)
 }

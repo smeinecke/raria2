@@ -137,7 +137,7 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		if !IsHTMLContent(contentType) {
 			return nil, errNotHTML
 		}
-		return getLinks(parsedUrl, res.Body)
+		return getLinks(parsedUrl, io.NopCloser(io.LimitReader(res.Body, 10<<20)))
 	}
 
 	// No explicit content-type: sniff prefix and keep stream readable for parser.
