@@ -494,7 +494,7 @@ func TestEnsureOutputDirExisting(t *testing.T) {
 
 func TestEnqueueDownloadEntry(t *testing.T) {
 	r := &RAria2{}
-	r.enqueueDownloadEntry(aria2URLEntry{URL: "https://example.com/a", Dir: "out"})
+	r.enqueueDownloadEntry(context.Background(), aria2URLEntry{URL: "https://example.com/a", Dir: "out"})
 	assert.Len(t, r.downloadEntries, 1)
 	assert.Equal(t, "https://example.com/a", r.downloadEntries[0].URL)
 }

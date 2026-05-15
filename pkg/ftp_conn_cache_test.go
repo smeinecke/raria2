@@ -22,7 +22,8 @@ func TestFtpConnKey(t *testing.T) {
 	assert.Equal(t, "anonymous", pass)
 	assert.False(t, implicitTLS)
 	assert.Contains(t, key, "ftp://")
-	assert.Contains(t, key, "anonymous:anonymous")
+	assert.Contains(t, key, "anonymous:")
+	assert.NotContains(t, key, "anonymous:anonymous")
 
 	u, _ = url.Parse("ftps://user:secret@example.com:990/path/")
 	key2, addr2, user2, pass2, _, implicitTLS2 := r.ftpConnKey(u)
@@ -31,7 +32,8 @@ func TestFtpConnKey(t *testing.T) {
 	assert.Equal(t, "secret", pass2)
 	assert.True(t, implicitTLS2)
 	assert.Contains(t, key2, "ftps://")
-	assert.Contains(t, key2, "user:secret")
+	assert.Contains(t, key2, "user:")
+	assert.NotContains(t, key2, "user:secret")
 
 	assert.NotEqual(t, key, key2)
 }

@@ -118,8 +118,10 @@ type RAria2 struct {
 	urlCache *URLCache
 
 	// robots.txt cache per host
-	robotsCache   map[string]*robotstxt.RobotsData
-	robotsCacheMu sync.RWMutex
+	robotsCache      map[string]*robotstxt.RobotsData
+	robotsCacheMu    sync.RWMutex
+	robotsInflight   map[string]*robotsCall
+	robotsInflightMu sync.Mutex
 
 	// channel used to stream download entries to aria2c/batch writer
 	downloadEntriesCh chan aria2URLEntry
@@ -136,6 +138,11 @@ type RAria2 struct {
 func safeRelativeOutputPath(urlPath string) (string, bool) {
 	if urlPath == "" {
 		return "", true
+	}
+	for i := 0; i < len(urlPath); i++ {
+		if urlPath[i] < 0x20 {
+			return "", false
+		}
 	}
 	// Convert Windows-style separators (literal or percent-encoded) so path.Clean can remove dot segments.
 	urlPath = backslashToSlash.Replace(urlPath)
@@ -236,14 +243,19 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	downloadErrCh := make(chan error, 1)
 	r.downloadEntriesCh = entriesCh
 
+	crawlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	go func() {
-		downloadErrCh <- r.executeBatchDownload(ctx, entriesCh)
+		err := r.executeBatchDownload(ctx, entriesCh)
+		if err != nil {
+			cancel()
+		}
+		downloadErrCh <- err
 	}()
 
-	r.crawl(ctx)
+	r.crawl(crawlCtx)
 
-	close(entriesCh)
-	r.downloadEntriesCh = nil
 	downloadErr := <-downloadErrCh
 
 	if err := r.saveVisitedCache(); err != nil {
@@ -333,6 +345,10 @@ func (r *RAria2) crawl(ctx context.Context) {
 	}
 
 	workers.Wait()
+	if ch := r.downloadEntriesCh; ch != nil {
+		close(ch)
+		r.downloadEntriesCh = nil
+	}
 }
 
 func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry crawlEntry, enqueue func(crawlEntry) bool) {
@@ -355,7 +371,7 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		return
 	}
 
-	if r.RespectRobots && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && !r.urlAllowedByRobots(parsedURL) {
+	if r.RespectRobots && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && !r.urlAllowedByRobots(ctx, parsedURL) {
 		logrus.Debugf("robots.txt disallowed %s", cUrl)
 		return
 	}
@@ -537,7 +553,7 @@ func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, 
 	}
 
 	entry := aria2URLEntry{URL: cUrl, Dir: outputDir}
-	r.enqueueDownloadEntry(entry)
+	r.enqueueDownloadEntry(ctx, entry)
 	logrus.Infof("[W %d]: queued %s for batch download (dir=%s)", workerId, cUrl, outputDir)
 }
 
@@ -579,13 +595,16 @@ func (r *RAria2) ensureOutputDir(workerId int, dir string) error {
 	return nil
 }
 
-func (r *RAria2) enqueueDownloadEntry(entry aria2URLEntry) {
+func (r *RAria2) enqueueDownloadEntry(ctx context.Context, entry aria2URLEntry) {
 	r.downloadEntriesMu.Lock()
 	r.downloadEntries = append(r.downloadEntries, entry)
 	ch := r.downloadEntriesCh
 	r.downloadEntriesMu.Unlock()
 	if ch != nil {
-		ch <- entry
+		select {
+		case ch <- entry:
+		case <-ctx.Done():
+		}
 	}
 }
 
@@ -663,6 +682,7 @@ func (r *RAria2) newDownloadSink(ctx context.Context) (downloadSink, error) {
 	am.DryRun = r.DryRun
 	am.Aria2AfterURLArgs = r.Aria2AfterURLArgs
 	am.WriteBatch = r.WriteBatch
+	am.SkipCertificateCheck = r.SkipCertificateCheck
 	am.sinkFactory = r.sinkFactory
 
 	return newAria2Sink(ctx, am)
@@ -679,7 +699,10 @@ func (r *RAria2) writeBatchFile(content []byte) error {
 		return fmt.Errorf("failed to write batch file %s: %w", r.WriteBatch, err)
 	}
 
+	r.downloadEntriesMu.Lock()
+	count := len(r.downloadEntries)
+	r.downloadEntriesMu.Unlock()
 	logrus.Infof("wrote aria2 batch file with %d download entries to %s",
-		len(r.downloadEntries), r.WriteBatch)
+		count, r.WriteBatch)
 	return nil
 }

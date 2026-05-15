@@ -75,6 +75,10 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("invalid URL provided")
 	}
+	scheme := strings.ToLower(parsedUrl.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "ftp" && scheme != "ftps" {
+		logrus.Fatalf("unsupported URL scheme %q (expected http, https, ftp, or ftps)", parsedUrl.Scheme)
+	}
 
 	client := raria2.New(parsedUrl)
 	client.OutputPath = args.Output
@@ -82,6 +86,9 @@ func main() {
 	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(args.Aria2Args)
 	client.DryRun = args.DryRun
 	client.HTTPTimeout = args.HTTPTimeout
+	if strings.ContainsAny(args.UserAgent, "\r\n") {
+		logrus.Fatalf("invalid user-agent: contains newline characters")
+	}
 	client.UserAgent = args.UserAgent
 	client.RateLimit = args.RateLimit
 	client.MaxDepth = args.MaxDepth
