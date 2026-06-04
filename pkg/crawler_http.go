@@ -137,7 +137,7 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		if !IsHTMLContent(contentType) {
 			return nil, errNotHTML
 		}
-		return getLinks(parsedUrl, io.NopCloser(io.LimitReader(res.Body, 10<<20)))
+		return getLinks(parsedUrl, r.url, r.FollowExternal, io.NopCloser(io.LimitReader(res.Body, 10<<20)))
 	}
 
 	// No explicit content-type: sniff prefix and keep stream readable for parser.
@@ -149,10 +149,10 @@ func (r *RAria2) getLinksByUrlWithContext(ctx context.Context, urlString string)
 		return nil, errNotHTML
 	}
 
-	return getLinks(parsedUrl, io.NopCloser(io.MultiReader(bytes.NewReader(prefix), res.Body)))
+	return getLinks(parsedUrl, r.url, r.FollowExternal, io.NopCloser(io.MultiReader(bytes.NewReader(prefix), res.Body)))
 }
 
-func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
+func getLinks(originalUrl *url.URL, baseUrl *url.URL, followExternal bool, body io.ReadCloser) ([]string, error) {
 	document, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
 		return []string{}, err
@@ -198,9 +198,17 @@ func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 			}
 		}
 
-		if IsSubPath(resolvedUrl, originalUrl) {
-			urlList = append(urlList, resolvedUrl.String())
+		if !followExternal {
+			effectiveBase := baseUrl
+			if effectiveBase == nil {
+				effectiveBase = originalUrl
+			}
+			if !IsSubPath(resolvedUrl, effectiveBase) {
+				return
+			}
 		}
+
+		urlList = append(urlList, resolvedUrl.String())
 	})
 
 	return urlList, nil

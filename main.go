@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var version = "v0.1.3.6"
 
 var errUserCanceled = errors.New("operation cancelled by user")
 
@@ -44,6 +44,7 @@ type cliOptions struct {
 	UserAgent              string
 	RateLimit              float64
 	RespectRobots          bool
+	FollowExternal         bool
 	AcceptMime             []string
 	RejectMime             []string
 	Aria2Args              []string
@@ -106,6 +107,7 @@ func newRootCommand() (*cobra.Command, *cliOptions) {
 	cmd.Flags().StringVar(&opts.UserAgent, "user-agent", "raria2/1.0", "Custom User-Agent string")
 	cmd.Flags().Float64Var(&opts.RateLimit, "rate-limit", 0, "Rate limit for HTTP requests (requests per second)")
 	cmd.Flags().BoolVar(&opts.RespectRobots, "respect-robots", false, "Respect robots.txt when crawling")
+	cmd.Flags().BoolVar(&opts.FollowExternal, "follow-external", false, "Follow links to external hosts (default: only same host)")
 	cmd.Flags().StringSliceVar(&opts.AcceptMime, "accept-mime", nil, "Comma-separated list of MIME types to include")
 	cmd.Flags().StringSliceVar(&opts.RejectMime, "reject-mime", nil, "Comma-separated list of MIME types to exclude")
 
@@ -152,6 +154,7 @@ func run(opts *cliOptions) error {
 	client.RateLimit = opts.RateLimit
 	client.MaxDepth = opts.MaxDepth
 	client.RespectRobots = opts.RespectRobots
+	client.FollowExternal = opts.FollowExternal
 	client.VisitedCachePath = opts.VisitedCachePath
 	client.WriteBatch = opts.WriteBatch
 	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(opts.Aria2Args)

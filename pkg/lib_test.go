@@ -1038,7 +1038,7 @@ func TestGetLinks_FiltersNonSubPaths(t *testing.T) {
   <a href="https://other.com/root/file4.bin">skip</a>
 </body></html>`))
 
-	links, err := getLinks(original, body)
+	links, err := getLinks(original, original, false, body)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{
 		"https://example.com/root/file1.bin",
@@ -1057,7 +1057,7 @@ func TestGetLinks_MirrorNforceFormat(t *testing.T) {
   </table>
 </body></html>`))
 
-	links, err := getLinks(base, body)
+	links, err := getLinks(base, base, false, body)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{
 		"https://mirror.nforce.com/pub/speedtests/10mb.bin",
@@ -1079,7 +1079,7 @@ func TestGetLinks_CopypartyFormat(t *testing.T) {
   </table>
 </body></html>`))
 
-	links, err := getLinks(base, body)
+	links, err := getLinks(base, base, false, body)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{
 		"https://a.ocv.me/pub/demo/docs/",
@@ -1087,6 +1087,58 @@ func TestGetLinks_CopypartyFormat(t *testing.T) {
 		"https://a.ocv.me/pub/demo/archive/",
 		"https://a.ocv.me/pub/demo/old/",
 		"https://a.ocv.me/pub/demo/showcase-hq.webm",
+	}, links)
+}
+
+func TestGetLinks_FollowExternalAllowsCrossHost(t *testing.T) {
+	original, _ := url.Parse("https://example.com/root/")
+	body := io.NopCloser(strings.NewReader(`
+<html><body>
+  <a href="https://example.com/root/file1.bin">same host subpath</a>
+  <a href="/other/file2.bin">same host sibling</a>
+  <a href="https://other.com/root/file3.bin">external host</a>
+</body></html>`))
+
+	// With followExternal=false and baseUrl=original: only subpaths of /root/ are allowed
+	links, err := getLinks(original, original, false, body)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{
+		"https://example.com/root/file1.bin",
+	}, links)
+
+	// Reset body reader
+	body = io.NopCloser(strings.NewReader(`
+<html><body>
+  <a href="https://example.com/root/file1.bin">same host subpath</a>
+  <a href="/other/file2.bin">same host sibling</a>
+  <a href="https://other.com/root/file3.bin">external host</a>
+</body></html>`))
+
+	// With followExternal=true: all links are allowed
+	links, err = getLinks(original, original, true, body)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{
+		"https://example.com/root/file1.bin",
+		"https://example.com/other/file2.bin",
+		"https://other.com/root/file3.bin",
+	}, links)
+}
+
+func TestGetLinks_UsesBaseUrlForSubPathCheck(t *testing.T) {
+	original, _ := url.Parse("https://example.com/more/")
+	base, _ := url.Parse("https://example.com/")
+	body := io.NopCloser(strings.NewReader(`
+<html><body>
+  <a href="/files/file1.bin">sibling file</a>
+  <a href="/more/sub/">sub directory</a>
+</body></html>`))
+
+	// With baseUrl=root, sibling paths on the same host are allowed
+	links, err := getLinks(original, base, false, body)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{
+		"https://example.com/files/file1.bin",
+		"https://example.com/more/sub/",
 	}, links)
 }
 
