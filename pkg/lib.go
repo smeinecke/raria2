@@ -102,6 +102,7 @@ type RAria2 struct {
 	VisitedCachePath       string
 	WriteBatch             string
 	RespectRobots          bool
+	FollowExternal         bool
 	Filters                *FilterManager
 	httpClient             *HTTPClient
 	httpClientOnce         sync.Once

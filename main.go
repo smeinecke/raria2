@@ -15,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var version = "dev"
+var version = "v0.1.3.6"
 
 var args struct {
 	Output                 string        `arg:"-o" help:"Output directory (defaults to host/path derived from the URL)"`
@@ -40,6 +40,7 @@ var args struct {
 	UserAgent              string        `arg:"--user-agent" help:"Custom User-Agent string" default:"raria2/1.0"`
 	RateLimit              float64       `arg:"--rate-limit" help:"Rate limit for HTTP requests (requests per second)" default:"0"`
 	RespectRobots          bool          `arg:"--respect-robots" help:"Respect robots.txt when crawling" default:"false"`
+	FollowExternal         bool          `arg:"--follow-external" help:"Follow links to external hosts (default: only same host)" default:"false"`
 	AcceptMime             []string      `arg:"--accept-mime" help:"Comma-separated list of MIME types to include"`
 	RejectMime             []string      `arg:"--reject-mime" help:"Comma-separated list of MIME types to exclude"`
 	Aria2Args              []string      `arg:"positional" help:"Options forwarded to aria2c after the URL (use -- before them if they look like flags)"`
@@ -93,6 +94,7 @@ func main() {
 	client.RateLimit = args.RateLimit
 	client.MaxDepth = args.MaxDepth
 	client.RespectRobots = args.RespectRobots
+	client.FollowExternal = args.FollowExternal
 	filters := client.FiltersConfig()
 	filters.AcceptMime = parseMimeArgs(args.AcceptMime)
 	filters.RejectMime = parseMimeArgs(args.RejectMime)

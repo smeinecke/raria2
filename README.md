@@ -57,6 +57,7 @@ Options:
   --log-level LEVEL       Log level (panic,fatal,error,warn,info,debug,trace) [default: info]
   --rate-limit RATE       Rate limit for HTTP requests (requests per second) [default: 0]
   --respect-robots        Respect robots.txt when crawling [default: false]
+  --follow-external       Follow links to external hosts [default: false]
   --accept-mime TYPES     Comma-separated list of MIME types to include
   --reject-mime TYPES     Comma-separated list of MIME types to exclude
   --help, -h             display this help and exit
@@ -93,6 +94,9 @@ raria2 --rate-limit=2 --user-agent='MyBot/1.0' 'https://example.com/pub/'
 
 # Respect robots.txt while crawling
 raria2 --respect-robots 'https://example.com/pub/'
+
+# Follow links to external hosts (default: only same host)
+raria2 --follow-external 'https://example.com/pub/'
 
 # MIME-type filtering - only download PDFs and images
 raria2 --accept-mime 'application/pdf,image/jpeg,image/png' 'https://example.com/files/'
