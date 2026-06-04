@@ -1069,10 +1069,12 @@ func TestGetLinks_MirrorNforceFormat(t *testing.T) {
 func TestGetLinks_CopypartyFormat(t *testing.T) {
 	base, _ := url.Parse("https://a.ocv.me/pub/demo/")
 	body := io.NopCloser(strings.NewReader(`
-<html><body>
+<html><head><script src="/.cpr/w/ui.css"></script></head><body>
   <table>
-    <tr><td>DIR</td><td><a href="docs/">&lt;docs/&gt;</a></td></tr>
-    <tr><td>DIR</td><td><a href="pics-vids/">&lt;pics-vids/&gt;</a></td></tr>
+    <tr><td><a href="docs/?zip=crc">zip</a></td><td><a href="docs/">&lt;docs/&gt;</a></td></tr>
+    <tr><td><a href="pics-vids/?zip">zip</a></td><td><a href="pics-vids/">&lt;pics-vids/&gt;</a></td></tr>
+    <tr><td><a href="archive/?tar=gz">tgz</a></td><td><a href="archive/">&lt;archive/&gt;</a></td></tr>
+    <tr><td><a href="old/?tar">tar</a></td><td><a href="old/">&lt;old/&gt;</a></td></tr>
     <tr><td>-</td><td><a href="showcase-hq.webm">showcase-hq.webm</a></td></tr>
   </table>
 </body></html>`))
@@ -1082,6 +1084,8 @@ func TestGetLinks_CopypartyFormat(t *testing.T) {
 	assert.Equal(t, []string{
 		"https://a.ocv.me/pub/demo/docs/",
 		"https://a.ocv.me/pub/demo/pics-vids/",
+		"https://a.ocv.me/pub/demo/archive/",
+		"https://a.ocv.me/pub/demo/old/",
 		"https://a.ocv.me/pub/demo/showcase-hq.webm",
 	}, links)
 }

@@ -158,6 +158,19 @@ func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 		return []string{}, err
 	}
 
+	isCopyparty := false
+	document.Find("[src],[href]").Each(func(i int, selection *goquery.Selection) {
+		if isCopyparty {
+			return
+		}
+		if src, ok := selection.Attr("src"); ok && strings.Contains(src, "/.cpr/w/") {
+			isCopyparty = true
+		}
+		if href, ok := selection.Attr("href"); ok && strings.Contains(href, "/.cpr/w/") {
+			isCopyparty = true
+		}
+	})
+
 	var urlList []string
 
 	document.Find("a[href]").Each(func(i int, selection *goquery.Selection) {
@@ -176,6 +189,13 @@ func getLinks(originalUrl *url.URL, body io.ReadCloser) ([]string, error) {
 
 		if SameUrl(resolvedUrl, originalUrl) {
 			return
+		}
+
+		if isCopyparty {
+			q := resolvedUrl.Query()
+			if q.Has("zip") || q.Has("tar") {
+				return
+			}
 		}
 
 		if IsSubPath(resolvedUrl, originalUrl) {
