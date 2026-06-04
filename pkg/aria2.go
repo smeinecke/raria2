@@ -137,6 +137,7 @@ func newAria2Sink(ctx context.Context, am *Aria2Manager) (downloadSink, error) {
 		args = append(args, "-j", strconv.Itoa(am.MaxConcurrentDownload))
 	}
 	args = append(args, "--input-file", "-", "--deferred-input=true")
+	args = append(args, "--follow-torrent=false")
 
 	if am.DryRun {
 		args = append(args, "--dry-run=true")
