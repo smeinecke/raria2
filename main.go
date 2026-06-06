@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "v0.1.3.6"
+var version = "v0.1.3.7"
 
 var errUserCanceled = errors.New("operation cancelled by user")
 
@@ -47,6 +47,8 @@ type cliOptions struct {
 	FollowExternal         bool
 	AcceptMime             []string
 	RejectMime             []string
+	SFTPGoUser             string
+	SFTPGoPassword         string
 	Aria2Args              []string
 }
 
@@ -108,6 +110,8 @@ func newRootCommand() (*cobra.Command, *cliOptions) {
 	cmd.Flags().Float64Var(&opts.RateLimit, "rate-limit", 0, "Rate limit for HTTP requests (requests per second)")
 	cmd.Flags().BoolVar(&opts.RespectRobots, "respect-robots", false, "Respect robots.txt when crawling")
 	cmd.Flags().BoolVar(&opts.FollowExternal, "follow-external", false, "Follow links to external hosts (default: only same host)")
+	cmd.Flags().StringVar(&opts.SFTPGoUser, "sftpgo-user", "", "SFTPGo web client username (default: extracted from URL)")
+	cmd.Flags().StringVar(&opts.SFTPGoPassword, "sftpgo-password", "", "SFTPGo web client password (default: extracted from URL)")
 	cmd.Flags().StringSliceVar(&opts.AcceptMime, "accept-mime", nil, "Comma-separated list of MIME types to include")
 	cmd.Flags().StringSliceVar(&opts.RejectMime, "reject-mime", nil, "Comma-separated list of MIME types to exclude")
 
@@ -142,7 +146,19 @@ func run(opts *cliOptions) error {
 		cancel()
 	}()
 
+
+	// Extract credentials from URL and strip them so they don't leak into requests.
+	urlUser := ""
+	urlPass := ""
+	if parsedURL.User != nil {
+		urlUser = parsedURL.User.Username()
+		urlPass, _ = parsedURL.User.Password()
+		parsedURL.User = nil
+	}
+
 	client := raria2.New(parsedURL)
+	client.SFTPGoUsername = firstNonEmpty(opts.SFTPGoUser, urlUser)
+	client.SFTPGoPassword = firstNonEmpty(opts.SFTPGoPassword, urlPass)
 	client.OutputPath = opts.Output
 	client.Aria2AfterURLArgs = opts.Aria2Args
 	client.DryRun = opts.DryRun
@@ -158,6 +174,7 @@ func run(opts *cliOptions) error {
 	client.VisitedCachePath = opts.VisitedCachePath
 	client.WriteBatch = opts.WriteBatch
 	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(opts.Aria2Args)
+
 
 	if err := setPositiveValue("--max-connection-per-server", opts.MaxConnectionPerServer); err != nil {
 		return err
@@ -211,6 +228,15 @@ func setPositiveValue(name string, value int) error {
 		return fmt.Errorf("invalid value for %s: %d", name, value)
 	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseExtensionArgs(values []string) map[string]struct{} {
