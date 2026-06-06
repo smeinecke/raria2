@@ -116,6 +116,11 @@ type RAria2 struct {
 	// does not perform any resource download
 	DryRun bool
 
+	// SFTPGo web client authentication
+	SFTPGoUsername      string
+	SFTPGoPassword      string
+	SFTPGoSessionCookie string
+
 	urlCache *URLCache
 
 	// robots.txt cache per host
@@ -239,6 +244,19 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	}
 	dir, _ := os.Getwd()
 	logrus.Infof("pwd: %v", dir)
+
+	// Auto-detect and authenticate SFTPGo web client instances.
+	if IsSFTPGoURL(r.url.String()) {
+		isSFTPGo, err := r.DetectSFTPGo(ctx)
+		if err != nil {
+			logrus.Warnf("SFTPGo detection failed: %v", err)
+		} else if isSFTPGo {
+			logrus.Info("SFTPGo web client detected, attempting login")
+			if err := r.SFTPGoLogin(ctx); err != nil {
+				return fmt.Errorf("SFTPGo login failed: %w", err)
+			}
+		}
+	}
 
 	entriesCh := make(chan aria2URLEntry, defaultDownloadQueueSize)
 	downloadErrCh := make(chan error, 1)
@@ -399,6 +417,55 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		!strings.HasSuffix(parsedURL.Path, "/") &&
 		isLikelyHTTPFilePath(parsedURL.Path) {
 		r.downloadResourceWithContext(ctx, workerId, cUrl)
+		return
+	}
+
+	// SFTPGo web client uses a JSON API for directory listings rather than HTML links.
+	if IsSFTPGoURL(cUrl) {
+		files, dirs, err := r.getSFTPGoLinks(ctx, cUrl)
+		if err != nil {
+			logrus.Warnf("unable to fetch SFTPGo listing %v: %v", cUrl, err)
+			return
+		}
+
+		nextDepth := entry.depth + 1
+		if r.MaxDepth >= 0 && nextDepth > r.MaxDepth {
+			return
+		}
+
+		// Queue files for immediate download (similar to FTP).
+		for _, link := range files {
+			parsedLink, err := url.Parse(link)
+			if err != nil {
+				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				continue
+			}
+			if !filters.PathAllowed(parsedLink) {
+				logrus.Debugf("path filters skipped %s", link)
+				continue
+			}
+			if !r.markVisited(link) {
+				logrus.WithField("url", link).Debug("skipping already visited")
+				continue
+			}
+			r.downloadResourceWithContext(ctx, workerId, link)
+		}
+
+		// Enqueue directories for further crawling.
+		for _, link := range dirs {
+			parsedLink, err := url.Parse(link)
+			if err != nil {
+				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				continue
+			}
+			if !filters.PathAllowed(parsedLink) {
+				logrus.Debugf("path filters skipped %s", link)
+				continue
+			}
+			if !enqueue(crawlEntry{url: link, depth: nextDepth}) {
+				logrus.Debugf("skipping enqueue for %s due to context cancellation", link)
+			}
+		}
 		return
 	}
 
@@ -685,6 +752,14 @@ func (r *RAria2) newDownloadSink(ctx context.Context) (downloadSink, error) {
 	am.WriteBatch = r.WriteBatch
 	am.SkipCertificateCheck = r.SkipCertificateCheck
 	am.sinkFactory = r.sinkFactory
+
+	// Forward SFTPGo session cookie to aria2c so authenticated downloads work.
+	if r.SFTPGoSessionCookie != "" {
+		am.Aria2AfterURLArgs = append(
+			[]string{"--header", "Cookie: " + r.SFTPGoSessionCookie},
+			am.Aria2AfterURLArgs...,
+		)
+	}
 
 	return newAria2Sink(ctx, am)
 }

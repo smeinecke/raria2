@@ -15,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var version = "v0.1.3.6"
+var version = "v0.1.3.7"
 
 var args struct {
 	Output                 string        `arg:"-o" help:"Output directory (defaults to host/path derived from the URL)"`
@@ -43,6 +43,8 @@ var args struct {
 	FollowExternal         bool          `arg:"--follow-external" help:"Follow links to external hosts (default: only same host)" default:"false"`
 	AcceptMime             []string      `arg:"--accept-mime" help:"Comma-separated list of MIME types to include"`
 	RejectMime             []string      `arg:"--reject-mime" help:"Comma-separated list of MIME types to exclude"`
+	SFTPGoUser             string        `arg:"--sftpgo-user" help:"SFTPGo web client username (default: extracted from URL)"`
+	SFTPGoPassword         string        `arg:"--sftpgo-password" help:"SFTPGo web client password (default: extracted from URL)"`
 	Aria2Args              []string      `arg:"positional" help:"Options forwarded to aria2c after the URL (use -- before them if they look like flags)"`
 }
 
@@ -81,7 +83,18 @@ func main() {
 		logrus.Fatalf("unsupported URL scheme %q (expected http, https, ftp, or ftps)", parsedUrl.Scheme)
 	}
 
+	// Extract credentials from URL and strip them so they don't leak into requests.
+	urlUser := ""
+	urlPass := ""
+	if parsedUrl.User != nil {
+		urlUser = parsedUrl.User.Username()
+		urlPass, _ = parsedUrl.User.Password()
+		parsedUrl.User = nil
+	}
+
 	client := raria2.New(parsedUrl)
+	client.SFTPGoUsername = firstNonEmpty(args.SFTPGoUser, urlUser)
+	client.SFTPGoPassword = firstNonEmpty(args.SFTPGoPassword, urlPass)
 	client.OutputPath = args.Output
 	client.Aria2AfterURLArgs = args.Aria2Args
 	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(args.Aria2Args)
@@ -140,6 +153,15 @@ func main() {
 		}
 		logrus.Fatal(err)
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseExtensionArgs(values []string) map[string]struct{} {

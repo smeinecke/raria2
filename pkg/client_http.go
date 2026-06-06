@@ -20,6 +20,8 @@ type HTTPClient struct {
 	rateMu      sync.Mutex
 	retryCount  int
 	baseDelay   time.Duration
+	cookie      string
+	cookieMu    sync.RWMutex
 }
 
 // NewHTTPClient creates a new HTTP client with the specified timeout and rate limit
@@ -46,8 +48,26 @@ func (c *HTTPClient) DoWithRetry(req *http.Request) (*http.Response, error) {
 	return c.doWithRetry(req, true)
 }
 
+// SetCookie sets the cookie string to be sent with every request.
+func (c *HTTPClient) SetCookie(cookie string) {
+	c.cookieMu.Lock()
+	defer c.cookieMu.Unlock()
+	c.cookie = cookie
+}
+
+// getCookie returns the current cookie value.
+func (c *HTTPClient) getCookie() string {
+	c.cookieMu.RLock()
+	defer c.cookieMu.RUnlock()
+	return c.cookie
+}
+
 // doWithRetry implements the retry logic
 func (c *HTTPClient) doWithRetry(req *http.Request, enableRetries bool) (*http.Response, error) {
+	if cookie := c.getCookie(); cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+
 	// If retries are disabled, just do a single request
 	if !enableRetries {
 		c.waitForRateLimit()

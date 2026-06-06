@@ -60,6 +60,8 @@ Options:
   --follow-external       Follow links to external hosts [default: false]
   --accept-mime TYPES     Comma-separated list of MIME types to include
   --reject-mime TYPES     Comma-separated list of MIME types to exclude
+  --sftpgo-user USER      SFTPGo web client username (default: extracted from URL)
+  --sftpgo-password PASS  SFTPGo web client password (default: extracted from URL)
   --help, -h             display this help and exit
 ```
 
@@ -106,6 +108,22 @@ raria2 --reject-mime 'application/octet-stream,application/x-executable,applicat
 
 # Skip TLS certificate verification (applies to both crawler checks and aria2 downloads)
 raria2 'https://example.com/pub/' -- --check-certificate=false
+```
+
+## SFTPGo Web Client Support
+
+raria2 can auto-detect, log in to, and crawl [SFTPGo](https://github.com/drakkan/sftpgo) web client instances. Credentials can be embedded in the URL or supplied via flags. The session cookie is forwarded to aria2c so authenticated downloads work out of the box.
+
+```bash
+# Credentials in the URL (auto-detected, auto-login, cookie forwarded)
+raria2 'http://user:pass@example.com:8080/web/client/files?path=/data'
+
+# Credentials via explicit flags
+raria2 --sftpgo-user=user --sftpgo-password=pass 'http://example.com:8080/web/client/files?path=/data'
+
+# Combined with other options
+raria2 -j 4 -w 8 --sftpgo-user=user --sftpgo-password=pass \
+  'http://example.com:8080/web/client/files?path=/data'
 ```
 
 ## Aria2 stdin bug workaround
