@@ -43,7 +43,7 @@ func TestHTTPClientDoWithRetryTransientError(t *testing.T) {
 	resp, err := c.DoWithRetry(req)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	assert.Equal(t, 3, attempts)
 }
 
@@ -60,7 +60,7 @@ func TestHTTPClientDoNoRetry(t *testing.T) {
 	resp, err := c.Do(req)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestWaitForRateLimitConcurrentSafety(t *testing.T) {

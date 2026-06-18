@@ -45,7 +45,7 @@ func (r *RAria2) DetectSFTPGo(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to fetch SFTPGo login page: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
@@ -96,7 +96,7 @@ func (r *RAria2) SFTPGoLogin(ctx context.Context) error {
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("failed to parse SFTPGo login page: %w", err)
 	}
@@ -133,7 +133,7 @@ func (r *RAria2) SFTPGoLogin(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("SFTPGo login POST failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("SFTPGo login POST returned status %d", resp.StatusCode)
@@ -219,7 +219,7 @@ func (r *RAria2) getSFTPGoLinks(ctx context.Context, urlString string) (files []
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch SFTPGo dirs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, nil, fmt.Errorf("SFTPGo dirs returned status %d", resp.StatusCode)
@@ -256,8 +256,6 @@ type sftpgoDirEntry struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
 }
-
-var cookieRegex = regexp.MustCompile(`(?:^|;\s*)jwt=([^;]+)`)
 
 // extractCookieValue pulls a specific cookie value out of a Set-Cookie or Cookie header string.
 func extractCookieValue(header, name string) string {

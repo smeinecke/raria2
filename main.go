@@ -146,7 +146,6 @@ func run(opts *cliOptions) error {
 		cancel()
 	}()
 
-
 	// Extract credentials from URL and strip them so they don't leak into requests.
 	urlUser := ""
 	urlPass := ""
@@ -174,7 +173,6 @@ func run(opts *cliOptions) error {
 	client.VisitedCachePath = opts.VisitedCachePath
 	client.WriteBatch = opts.WriteBatch
 	client.SkipCertificateCheck = hasAria2CheckCertificateDisabled(opts.Aria2Args)
-
 
 	if err := setPositiveValue("--max-connection-per-server", opts.MaxConnectionPerServer); err != nil {
 		return err

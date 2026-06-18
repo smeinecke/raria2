@@ -21,7 +21,7 @@ func TestIsSFTPGoURL(t *testing.T) {
 func TestDetectSFTPGo(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/web/client/login" {
-			w.Write([]byte("<html><script>$('title').text('SFTPGo 2.7 WebClient');</script></html>"))
+			_, _ = w.Write([]byte("<html><script>$('title').text('SFTPGo 2.7 WebClient');</script></html>"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -40,7 +40,7 @@ func TestDetectSFTPGo(t *testing.T) {
 func TestDetectSFTPGo_NotSFTPGo(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/web/client/login" {
-			w.Write([]byte("<html><title>Some Other App</title></html>"))
+			_, _ = w.Write([]byte("<html><title>Some Other App</title></html>"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -62,7 +62,7 @@ func TestSFTPGoLogin(t *testing.T) {
 		case "/web/client/login":
 			if r.Method == http.MethodGet {
 				http.SetCookie(w, &http.Cookie{Name: "jwt", Value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJXZWJMb2dpbiJ9", Path: "/web/client"})
-				w.Write([]byte(`<form action="/web/client/login" method="POST">
+				_, _ = w.Write([]byte(`<form action="/web/client/login" method="POST">
 					<input name="username" />
 					<input name="password" />
 					<input type="hidden" name="_form_token" value="formtoken123" />
@@ -111,7 +111,7 @@ func TestSFTPGoLogin(t *testing.T) {
 func TestSFTPGoLogin_MissingFormToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/web/client/login" && r.Method == http.MethodGet {
-			w.Write([]byte(`<html><body>No form token here</body></html>`))
+			_, _ = w.Write([]byte(`<html><body>No form token here</body></html>`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -133,7 +133,7 @@ func TestGetSFTPGoLinks(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/web/client/dirs" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[
+			_, _ = w.Write([]byte(`[
 				{"name": "file1.zip", "type": "2", "url": "/web/client/files?path=%2Ffile1.zip&_=1"},
 				{"name": "subdir", "type": "1", "url": "/web/client/files?path=%2Fsubdir&_=1"}
 			]`))
@@ -159,7 +159,7 @@ func TestGetSFTPGoLinks_EmptyDir(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/web/client/dirs" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[]`))
+			_, _ = w.Write([]byte(`[]`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -197,7 +197,7 @@ func TestHTTPClientCookie(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
 	resp, err := c.Do(req)
 	assert.NoError(t, err)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	assert.Equal(t, "jwt=session123", receivedCookie)
 }
