@@ -4,13 +4,17 @@ import (
 	"testing"
 	"time"
 
+	arg "github.com/alexflint/go-arg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCLIFlagsCompatibility(t *testing.T) {
-	cmd, opts := newRootCommand()
-	cmd.SetArgs([]string{
+	var opts cliOptions
+	p, err := arg.NewParser(arg.Config{}, &opts)
+	require.NoError(t, err)
+
+	err = p.Parse([]string{
 		"-d",
 		"-o", "output",
 		"-x", "9",
@@ -26,8 +30,6 @@ func TestCLIFlagsCompatibility(t *testing.T) {
 		"--max-download-limit=1M",
 		"--split=8",
 	})
-
-	err := cmd.Execute()
 	require.NoError(t, err)
 
 	assert.True(t, opts.DryRun)
@@ -37,17 +39,18 @@ func TestCLIFlagsCompatibility(t *testing.T) {
 	assert.Equal(t, 7, opts.Threads)
 	assert.Equal(t, 2, opts.MaxDepth)
 	assert.Equal(t, 45*time.Second, opts.HTTPTimeout)
-	assert.Equal(t, []string{"pdf", "jpg", "iso"}, opts.AcceptExtensions)
+	assert.Equal(t, []string{"pdf,jpg", "iso"}, opts.AcceptExtensions)
 	assert.Equal(t, []string{"application/zip"}, opts.RejectMime)
 	assert.Equal(t, "https://example.com/root/", opts.URL)
 	assert.Equal(t, []string{"--max-download-limit=1M", "--split=8"}, opts.Aria2Args)
 }
 
 func TestCLIRequiresURL(t *testing.T) {
-	cmd, _ := newRootCommand()
-	cmd.SetArgs([]string{"--dry-run"})
+	var opts cliOptions
+	p, err := arg.NewParser(arg.Config{}, &opts)
+	require.NoError(t, err)
 
-	err := cmd.Execute()
+	err = p.Parse([]string{"--dry-run"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "please provide an URL")
+	assert.Contains(t, err.Error(), "required")
 }

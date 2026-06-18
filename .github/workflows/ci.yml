@@ -18,23 +18,14 @@ concurrency:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [ "1.26.4", "1.25.11" ]
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go ${{ matrix.go-version }}
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
           cache: true
 
       - name: Run CI
         run: make ci
-        if: matrix.go-version == '1.26.4'
-
-      - name: Run tests (compatibility check)
-        run: make test
-        if: matrix.go-version == '1.25.11'

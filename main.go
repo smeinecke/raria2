@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	arg "github.com/alexflint/go-arg"
 	raria2 "github.com/denysvitali/raria2/pkg"
 	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 )
 
 var version = "v0.1.3.7"
@@ -22,100 +22,50 @@ var version = "v0.1.3.7"
 var errUserCanceled = errors.New("operation cancelled by user")
 
 type cliOptions struct {
-	Output                 string
-	DryRun                 bool
-	URL                    string
-	LogLevel               string
-	MaxConnectionPerServer int
-	MaxConcurrentDownload  int
-	Threads                int
-	Aria2SessionSize       int
-	MaxDepth               int
-	AcceptExtensions       []string
-	RejectExtensions       []string
-	AcceptFilenames        []string
-	RejectFilenames        []string
-	CaseInsensitivePaths   bool
-	AcceptPaths            []string
-	RejectPaths            []string
-	VisitedCachePath       string
-	WriteBatch             string
-	HTTPTimeout            time.Duration
-	UserAgent              string
-	RateLimit              float64
-	RespectRobots          bool
-	FollowExternal         bool
-	AcceptMime             []string
-	RejectMime             []string
-	SFTPGoUser             string
-	SFTPGoPassword         string
-	Aria2Args              []string
+	Output                 string        `arg:"-o" help:"Output directory (defaults to host/path derived from the URL)"`
+	DryRun                 bool          `arg:"-d,--dry-run" help:"Dry Run" default:"false"`
+	URL                    string        `arg:"positional,required" help:"The URL to crawl"`
+	LogLevel               string        `arg:"--log-level" help:"Log level (panic,fatal,error,warn,info,debug,trace)" default:"info"`
+	MaxConnectionPerServer int           `arg:"-x,--max-connection-per-server" help:"Parallel connections per download" default:"5"`
+	MaxConcurrentDownload  int           `arg:"-j,--max-concurrent-downloads" help:"Maximum concurrent downloads" default:"5"`
+	Threads                int           `arg:"-w,--threads" help:"Concurrent crawler threads" default:"5"`
+	Aria2SessionSize       int           `arg:"--aria2-session-size" help:"Number of links to send to a single aria2c process before restarting it (0 = unlimited)" default:"100"`
+	MaxDepth               int           `arg:"--max-depth" help:"Maximum HTML depth to crawl (-1 for unlimited)" default:"-1"`
+	AcceptExtensions       []string      `arg:"--accept,separate" help:"Comma-separated list(s) of file extensions to include (case-insensitive, without dot)"`
+	RejectExtensions       []string      `arg:"--reject,separate" help:"Comma-separated list(s) of file extensions to exclude"`
+	AcceptFilenames        []string      `arg:"--accept-filename,separate" help:"Comma-separated list(s) of filename globs to include"`
+	RejectFilenames        []string      `arg:"--reject-filename,separate" help:"Comma-separated list(s) of filename globs to exclude"`
+	CaseInsensitivePaths   bool          `arg:"--case-insensitive-paths" help:"Make path matching case-insensitive"`
+	AcceptPaths            []string      `arg:"--accept-path,separate" help:"Path glob or regex (prefix with regex:) to include"`
+	RejectPaths            []string      `arg:"--reject-path,separate" help:"Path glob or regex (prefix with regex:) to exclude"`
+	VisitedCachePath       string        `arg:"--visited-cache" help:"Optional file to persist visited URLs for resuming crawls"`
+	WriteBatch             string        `arg:"--write-batch" help:"Write aria2 input file to disk instead of executing"`
+	HTTPTimeout            time.Duration `arg:"--http-timeout" help:"HTTP client timeout" default:"30s"`
+	UserAgent              string        `arg:"--user-agent" help:"Custom User-Agent string" default:"raria2/1.0"`
+	RateLimit              float64       `arg:"--rate-limit" help:"Rate limit for HTTP requests (requests per second)" default:"0"`
+	RespectRobots          bool          `arg:"--respect-robots" help:"Respect robots.txt when crawling" default:"false"`
+	FollowExternal         bool          `arg:"--follow-external" help:"Follow links to external hosts (default: only same host)" default:"false"`
+	SFTPGoUser             string        `arg:"--sftpgo-user" help:"SFTPGo web client username (default: extracted from URL)"`
+	SFTPGoPassword         string        `arg:"--sftpgo-password" help:"SFTPGo web client password (default: extracted from URL)"`
+	AcceptMime             []string      `arg:"--accept-mime,separate" help:"Comma-separated list of MIME types to include"`
+	RejectMime             []string      `arg:"--reject-mime,separate" help:"Comma-separated list of MIME types to exclude"`
+	Aria2Args              []string      `arg:"positional" help:"Options forwarded to aria2c after the URL (use -- before them if they look like flags)"`
+}
+
+// Version implements arg.Versioned for --version support.
+func (cliOptions) Version() string {
+	return version
 }
 
 func main() {
-	rootCmd, opts := newRootCommand()
-	if err := rootCmd.Execute(); err != nil {
-		logrus.Fatal(err)
-	}
-	if err := run(opts); err != nil {
+	var opts cliOptions
+	arg.MustParse(&opts)
+	if err := run(&opts); err != nil {
 		if errors.Is(err, errUserCanceled) {
 			os.Exit(130)
 		}
 		logrus.Fatal(err)
 	}
-}
-
-func newRootCommand() (*cobra.Command, *cliOptions) {
-	opts := &cliOptions{}
-
-	cmd := &cobra.Command{
-		Use:           "raria2 [flags] URL [-- ARIA2_OPTS...]",
-		Short:         "Mirror open directories using aria2",
-		Version:       version,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) < 1 {
-				return fmt.Errorf("please provide an URL (version: %s)", version)
-			}
-			opts.URL = args[0]
-			opts.Aria2Args = args[1:]
-			return nil
-		},
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return nil
-		},
-	}
-	cmd.Flags().SortFlags = false
-
-	cmd.Flags().StringVarP(&opts.Output, "output", "o", "", "Output directory (defaults to host/path derived from the URL)")
-	cmd.Flags().BoolVarP(&opts.DryRun, "dry-run", "d", false, "Dry Run")
-	cmd.Flags().StringVar(&opts.LogLevel, "log-level", "info", "Log level (panic,fatal,error,warn,info,debug,trace)")
-	cmd.Flags().IntVarP(&opts.MaxConnectionPerServer, "max-connection-per-server", "x", 5, "Parallel connections per download")
-	cmd.Flags().IntVarP(&opts.MaxConcurrentDownload, "max-concurrent-downloads", "j", 5, "Maximum concurrent downloads")
-	cmd.Flags().IntVarP(&opts.Threads, "threads", "w", 5, "Concurrent crawler threads")
-	cmd.Flags().IntVar(&opts.Aria2SessionSize, "aria2-session-size", 100, "Number of links to send to a single aria2c process before restarting it (0 = unlimited)")
-	cmd.Flags().IntVar(&opts.MaxDepth, "max-depth", -1, "Maximum HTML depth to crawl (-1 for unlimited)")
-	cmd.Flags().StringSliceVar(&opts.AcceptExtensions, "accept", nil, "Comma-separated list(s) of file extensions to include (case-insensitive, without dot)")
-	cmd.Flags().StringSliceVar(&opts.RejectExtensions, "reject", nil, "Comma-separated list(s) of file extensions to exclude")
-	cmd.Flags().StringSliceVar(&opts.AcceptFilenames, "accept-filename", nil, "Comma-separated list(s) of filename globs to include")
-	cmd.Flags().StringSliceVar(&opts.RejectFilenames, "reject-filename", nil, "Comma-separated list(s) of filename globs to exclude")
-	cmd.Flags().BoolVar(&opts.CaseInsensitivePaths, "case-insensitive-paths", false, "Make path matching case-insensitive")
-	cmd.Flags().StringSliceVar(&opts.AcceptPaths, "accept-path", nil, "Path glob or regex (prefix with regex:) to include")
-	cmd.Flags().StringSliceVar(&opts.RejectPaths, "reject-path", nil, "Path glob or regex (prefix with regex:) to exclude")
-	cmd.Flags().StringVar(&opts.VisitedCachePath, "visited-cache", "", "Optional file to persist visited URLs for resuming crawls")
-	cmd.Flags().StringVar(&opts.WriteBatch, "write-batch", "", "Write aria2 input file to disk instead of executing")
-	cmd.Flags().DurationVar(&opts.HTTPTimeout, "http-timeout", 30*time.Second, "HTTP client timeout")
-	cmd.Flags().StringVar(&opts.UserAgent, "user-agent", "raria2/1.0", "Custom User-Agent string")
-	cmd.Flags().Float64Var(&opts.RateLimit, "rate-limit", 0, "Rate limit for HTTP requests (requests per second)")
-	cmd.Flags().BoolVar(&opts.RespectRobots, "respect-robots", false, "Respect robots.txt when crawling")
-	cmd.Flags().BoolVar(&opts.FollowExternal, "follow-external", false, "Follow links to external hosts (default: only same host)")
-	cmd.Flags().StringVar(&opts.SFTPGoUser, "sftpgo-user", "", "SFTPGo web client username (default: extracted from URL)")
-	cmd.Flags().StringVar(&opts.SFTPGoPassword, "sftpgo-password", "", "SFTPGo web client password (default: extracted from URL)")
-	cmd.Flags().StringSliceVar(&opts.AcceptMime, "accept-mime", nil, "Comma-separated list of MIME types to include")
-	cmd.Flags().StringSliceVar(&opts.RejectMime, "reject-mime", nil, "Comma-separated list of MIME types to exclude")
-
-	return cmd, opts
 }
 
 func run(opts *cliOptions) error {
