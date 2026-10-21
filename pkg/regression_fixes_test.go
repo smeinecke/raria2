@@ -145,3 +145,10 @@ func TestBatchDownloadStillPropagatesSinkErrors(t *testing.T) {
 
 	assert.Error(t, am.ExecuteBatchDownload(context.Background(), &RAria2{}, entries))
 }
+
+// Default FTP/FTPS ports must canonicalize like http/https ones do.
+func TestCanonicalURLFTPDefaultPorts(t *testing.T) {
+	assert.Equal(t, canonicalURL("ftp://example.com/"), canonicalURL("ftp://example.com:21/"))
+	assert.Equal(t, canonicalURL("ftps://example.com/"), canonicalURL("ftps://example.com:990/"))
+	assert.NotEqual(t, canonicalURL("ftp://example.com/"), canonicalURL("ftp://example.com:2121/"))
+}

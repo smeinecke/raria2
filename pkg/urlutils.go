@@ -40,6 +40,14 @@ func canonicalURL(raw string) string {
 			if parsed.Port() == "443" {
 				parsed.Host = parsed.Hostname()
 			}
+		case "ftp":
+			if parsed.Port() == "21" {
+				parsed.Host = parsed.Hostname()
+			}
+		case "ftps":
+			if parsed.Port() == "990" {
+				parsed.Host = parsed.Hostname()
+			}
 		}
 	}
 
