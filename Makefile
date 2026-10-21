@@ -7,7 +7,7 @@ STATICCHECK := $(GOBIN)/staticcheck
 GOSEC := $(GOBIN)/gosec
 .DEFAULT_GOAL := ci
 
-.PHONY: fmt fmt-check vet lint lint-extra security build test govulncheck staticcheck gosec tidy-check ci tools
+.PHONY: fmt fmt-check vet lint lint-extra security build test test-integration govulncheck staticcheck gosec tidy-check ci tools
 
 fmt:
 	gofmt -w $(GOFILES)
@@ -46,6 +46,11 @@ build:
 
 test: build
 	$(GO) test -race -coverprofile=coverage.out ./...
+
+# Integration tests run real servers (FTP in-process; SFTPGo, nginx and
+# copyparty via testcontainers) and require a working Docker daemon.
+test-integration:
+	cd tests/integration && $(GO) test -v ./...
 
 $(GOVULNCHECK):
 	GO111MODULE=on $(GO) install golang.org/x/vuln/cmd/govulncheck@latest
