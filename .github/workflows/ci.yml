@@ -30,6 +30,20 @@ jobs:
       - name: Run CI
         run: make ci
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run security checks
+        run: make security
+
   integration:
     runs-on: ubuntu-latest
     steps:

@@ -36,7 +36,7 @@ staticcheck: $(STATICCHECK)
 	$(STATICCHECK) ./...
 
 $(GOSEC):
-	GO111MODULE=on $(GO) install github.com/securego/gosec/v2/cmd/gosec@latest
+	GO111MODULE=on $(GO) install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
 gosec: $(GOSEC)
 	$(GOSEC) ./...
