@@ -491,7 +491,10 @@ func TestEnqueueDownloadEntry(t *testing.T) {
 func TestIsHTMLContent(t *testing.T) {
 	assert.True(t, IsHTMLContent("text/html; charset=utf-8"))
 	assert.True(t, IsHTMLContent("text/html"))
+	assert.True(t, IsHTMLContent("TEXT/HTML"))
+	assert.True(t, IsHTMLContent("Text/Html; Charset=UTF-8"))
 	assert.False(t, IsHTMLContent("application/octet-stream"))
+	assert.False(t, IsHTMLContent("application/xhtml+xml"))
 }
 
 func TestRun_FailsWhenAria2Missing(t *testing.T) {

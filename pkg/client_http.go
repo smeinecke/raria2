@@ -168,7 +168,7 @@ func IsTransientError(err error) bool {
 func IsHTMLContent(contentType string) bool {
 	contentTypeEntries := strings.Split(contentType, ";")
 	for _, v := range contentTypeEntries {
-		if strings.TrimSpace(v) == "text/html" {
+		if strings.EqualFold(strings.TrimSpace(v), "text/html") {
 			return true
 		}
 	}
