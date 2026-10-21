@@ -171,6 +171,37 @@ func (r *RAria2) sftpgoBaseURL() *url.URL {
 	}
 }
 
+// sftpgoEntryPath returns the virtual filesystem path carried by an SFTPGo
+// web-client URL (the `path` query parameter), e.g. "/dir/file.zip" for
+// "https://host/web/client/files?path=/dir/file.zip".
+func sftpgoEntryPath(u *url.URL) (string, bool) {
+	if u == nil || !strings.Contains(u.Path, "/web/client/") {
+		return "", false
+	}
+	p := u.Query().Get("path")
+	if p == "" {
+		return "", false
+	}
+	return p, true
+}
+
+// sftpgoRelToSeedRoot makes an SFTPGo `path` parameter relative to the seed
+// URL's own `path` parameter so that downloads mirror the crawled subtree.
+func (r *RAria2) sftpgoRelToSeedRoot(rel string) string {
+	root, ok := sftpgoEntryPath(r.url)
+	if !ok {
+		return rel
+	}
+	root = strings.TrimSuffix(root, "/")
+	if root == "" {
+		return strings.TrimPrefix(rel, "/")
+	}
+	if rel == root {
+		return ""
+	}
+	return strings.TrimPrefix(rel, root+"/")
+}
+
 // getSFTPGoLinks fetches the SFTPGo JSON directory listing and returns
 // file URLs (type "2") and directory URLs (type "1").
 func (r *RAria2) getSFTPGoLinks(ctx context.Context, urlString string) (files []string, dirs []string, err error) {

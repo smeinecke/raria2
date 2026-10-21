@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,6 +175,24 @@ func TestGetSFTPGoLinks_EmptyDir(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, files)
 	assert.Empty(t, dirs)
+}
+
+func TestDownloadResourceSFTPGoUsesPathParam(t *testing.T) {
+	outputDir := tempDir(t)
+	base := mustParseURL(t, "https://example.com/web/client/files?path=/base/")
+	r := &RAria2{
+		url:        base,
+		OutputPath: outputDir,
+		DryRun:     true,
+	}
+
+	r.downloadResource(1, "https://example.com/web/client/files?path=/base/sub/file1.zip&_=1")
+
+	if assert.Len(t, r.downloadEntries, 1) {
+		entry := r.downloadEntries[0]
+		assert.Equal(t, filepath.Join(outputDir, "sub"), entry.Dir)
+		assert.Equal(t, "file1.zip", entry.Out)
+	}
 }
 
 func TestExtractCookieValue(t *testing.T) {

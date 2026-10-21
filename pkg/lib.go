@@ -598,37 +598,49 @@ func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, 
 	// Get relative directory (and filename when it can be derived safely).
 	var outputPath string
 	var outName string
-
-	p1 := parsedCUrl.Path
-	p2 := r.url.Path
-
-	// A URL is relative to the seed only if p2 is a boundary-aware prefix:
-	// p2 ends in '/', matches p1 exactly, or is followed by '/' in p1.
-	// ("/files2/x" must not be treated as relative to "/files".)
-	if strings.HasPrefix(p1, p2) &&
-		(p2 == "" || strings.HasSuffix(p2, "/") || len(p1) == len(p2) || p1[len(p2)] == '/') {
-		candidate := strings.TrimPrefix(p1, p2)
-		candidate = strings.TrimPrefix(candidate, "/")
-		cleanCandidate, ok := safeRelativeOutputPath(candidate)
-		if !ok {
-			logrus.Warnf("[W %d]: refusing potentially unsafe output path derived from URL %s: %q", workerId, logURL(cUrl), candidate)
+	if relPath, ok := sftpgoEntryPath(parsedCUrl); ok {
+		// SFTPGo URLs carry the real path in the `path` query parameter.
+		cleanRel, ok2 := safeRelativeOutputPath(r.sftpgoRelToSeedRoot(relPath))
+		if !ok2 {
+			logrus.Warnf("[W %d]: refusing potentially unsafe output path derived from URL %s: %q", workerId, logURL(cUrl), relPath)
 			return
 		}
-		outputPath = cleanCandidate
-		if cleanCandidate != "" {
-			outName = path.Base(cleanCandidate)
+		outputPath = cleanRel
+		if cleanRel != "" {
+			outName = path.Base(cleanRel)
 		}
 	} else {
-		cleanPath, ok := safeRelativeOutputPath(parsedCUrl.Path)
-		if !ok {
-			logrus.Warnf("[W %d]: refusing potentially unsafe output path derived from URL %s: %q", workerId, logURL(cUrl), parsedCUrl.Path)
-			return
-		}
-		if cleanPath == "" {
-			outputPath = parsedCUrl.Host
+		p1 := parsedCUrl.Path
+		p2 := r.url.Path
+
+		// A URL is relative to the seed only if p2 is a boundary-aware prefix:
+		// p2 ends in '/', matches p1 exactly, or is followed by '/' in p1.
+		// ("/files2/x" must not be treated as relative to "/files".)
+		if strings.HasPrefix(p1, p2) &&
+			(p2 == "" || strings.HasSuffix(p2, "/") || len(p1) == len(p2) || p1[len(p2)] == '/') {
+			candidate := strings.TrimPrefix(p1, p2)
+			candidate = strings.TrimPrefix(candidate, "/")
+			cleanCandidate, ok := safeRelativeOutputPath(candidate)
+			if !ok {
+				logrus.Warnf("[W %d]: refusing potentially unsafe output path derived from URL %s: %q", workerId, logURL(cUrl), candidate)
+				return
+			}
+			outputPath = cleanCandidate
+			if cleanCandidate != "" {
+				outName = path.Base(cleanCandidate)
+			}
 		} else {
-			outputPath = parsedCUrl.Host + "/" + cleanPath
-			outName = path.Base(cleanPath)
+			cleanPath, ok := safeRelativeOutputPath(parsedCUrl.Path)
+			if !ok {
+				logrus.Warnf("[W %d]: refusing potentially unsafe output path derived from URL %s: %q", workerId, logURL(cUrl), parsedCUrl.Path)
+				return
+			}
+			if cleanPath == "" {
+				outputPath = parsedCUrl.Host
+			} else {
+				outputPath = parsedCUrl.Host + "/" + cleanPath
+				outName = path.Base(cleanPath)
+			}
 		}
 	}
 
