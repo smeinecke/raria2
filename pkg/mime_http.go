@@ -27,29 +27,47 @@ func (r *RAria2) sniffHTTPContentTypeWithContext(ctx context.Context, workerId i
 
 	// If HEAD failed or did not provide a usable content-type, sniff via a small GET.
 	if contentType == "" {
-		sniffReq, reqErr := http.NewRequestWithContext(ctx, "GET", cUrl, nil)
-		if reqErr != nil {
-			return "", false
-		}
-		sniffReq.Header.Set("User-Agent", r.UserAgent)
-		sniffReq.Header.Set("Range", "bytes=0-1023")
-		var sniffRes *http.Response
-		if r.DisableRetries {
-			sniffRes, err = r.client().Do(sniffReq)
-		} else {
-			sniffRes, err = r.client().DoWithRetry(sniffReq)
-		}
+		sniffRes, err := r.sniffGet(ctx, cUrl, true)
 		if err != nil {
 			return "", false
 		}
-		defer closeQuietly(sniffRes.Body)
-
-		if sniffRes.StatusCode >= 200 && sniffRes.StatusCode < 300 {
-			limitReader := io.LimitReader(sniffRes.Body, 1024)
-			bodyBytes, _ := io.ReadAll(limitReader)
-			contentType = http.DetectContentType(bodyBytes)
+		if sniffRes != nil {
+			// Some servers reject Range requests; retry without it like
+			// IsHtmlPageWithContext does.
+			if sniffRes.StatusCode == 416 || sniffRes.StatusCode == 400 {
+				closeQuietly(sniffRes.Body)
+				sniffRes, err = r.sniffGet(ctx, cUrl, false)
+				if err != nil {
+					return "", false
+				}
+			}
+			if sniffRes != nil {
+				defer closeQuietly(sniffRes.Body)
+				if sniffRes.StatusCode >= 200 && sniffRes.StatusCode < 300 {
+					limitReader := io.LimitReader(sniffRes.Body, 1024)
+					bodyBytes, _ := io.ReadAll(limitReader)
+					contentType = http.DetectContentType(bodyBytes)
+				}
+			}
 		}
 	}
 
 	return contentType, true
+}
+
+// sniffGet issues a GET request for content-type sniffing. When useRange is
+// true, only the first KiB is requested.
+func (r *RAria2) sniffGet(ctx context.Context, cUrl string, useRange bool) (*http.Response, error) {
+	sniffReq, err := http.NewRequestWithContext(ctx, "GET", cUrl, nil)
+	if err != nil {
+		return nil, err
+	}
+	sniffReq.Header.Set("User-Agent", r.UserAgent)
+	if useRange {
+		sniffReq.Header.Set("Range", "bytes=0-1023")
+	}
+	if r.DisableRetries {
+		return r.client().Do(sniffReq)
+	}
+	return r.client().DoWithRetry(sniffReq)
 }
