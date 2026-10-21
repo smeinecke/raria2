@@ -172,3 +172,32 @@ func TestDetectSFTPGoV3(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, detected)
 }
+
+// The stored session cookie must be a clean "name=value" pair; cookie
+// attributes (Path/Expires) do not belong in a Cookie header.
+func TestSFTPGoSessionCookieIsNameValueOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web/client/login" {
+			if r.Method == http.MethodGet {
+				http.SetCookie(w, &http.Cookie{Name: "jwt", Value: "initialtoken", Path: "/web/client"})
+				_, _ = w.Write([]byte(`<input type="hidden" name="_form_token" value="tok" />`))
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "jwt", Value: "sessiontoken", Path: "/web/client", MaxAge: 3600})
+			w.Header().Set("Location", "/web/client/files")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	base, _ := url.Parse(server.URL + "/web/client/files?path=/")
+	r := New(base)
+	r.DisableRetries = true
+	r.SFTPGoUsername = "u"
+	r.SFTPGoPassword = "p"
+
+	require.NoError(t, r.SFTPGoLogin(context.Background()))
+	assert.Equal(t, "jwt=sessiontoken", r.SFTPGoSessionCookie)
+}

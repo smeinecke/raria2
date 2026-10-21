@@ -88,16 +88,14 @@ func (r *RAria2) SFTPGoLogin(ctx context.Context) error {
 	var initialCookie string
 	for _, c := range resp.Cookies() {
 		if c.Name == "jwt" {
-			initialCookie = c.String()
+			initialCookie = c.Name + "=" + c.Value
 			break
 		}
 	}
 	if initialCookie == "" {
-		// Fallback: look at Set-Cookie header manually if cookie jar didn't capture it
-		setCookie := resp.Header.Get("Set-Cookie")
-		if strings.Contains(setCookie, "jwt=") {
-			initialCookie = extractCookieValue(setCookie, "jwt")
-		}
+		// Fallback: look at Set-Cookie headers manually if the cookie jar
+		// didn't capture it.
+		initialCookie = findJWTCookie(resp.Header)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
@@ -148,15 +146,12 @@ func (r *RAria2) SFTPGoLogin(ctx context.Context) error {
 	var sessionCookie string
 	for _, c := range resp.Cookies() {
 		if c.Name == "jwt" {
-			sessionCookie = c.String()
+			sessionCookie = c.Name + "=" + c.Value
 			break
 		}
 	}
 	if sessionCookie == "" {
-		setCookie := resp.Header.Get("Set-Cookie")
-		if strings.Contains(setCookie, "jwt=") {
-			sessionCookie = extractCookieValue(setCookie, "jwt")
-		}
+		sessionCookie = findJWTCookie(resp.Header)
 	}
 	if sessionCookie == "" {
 		return fmt.Errorf("SFTPGo session cookie not received after login")
@@ -317,6 +312,19 @@ func extractCookieValue(header, name string) string {
 	m := re.FindStringSubmatch(header)
 	if len(m) > 1 {
 		return name + "=" + m[1]
+	}
+	return ""
+}
+
+// findJWTCookie scans all Set-Cookie response headers for the jwt cookie and
+// returns it in "name=value" form.
+func findJWTCookie(h http.Header) string {
+	for _, setCookie := range h.Values("Set-Cookie") {
+		if strings.Contains(setCookie, "jwt=") {
+			if v := extractCookieValue(setCookie, "jwt"); v != "" {
+				return v
+			}
+		}
 	}
 	return ""
 }
