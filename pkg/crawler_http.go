@@ -163,11 +163,21 @@ func getLinks(originalUrl *url.URL, baseUrl *url.URL, followExternal bool, body 
 		if isCopyparty {
 			return
 		}
-		if src, ok := selection.Attr("src"); ok && strings.Contains(src, "/.cpr/w/") {
-			isCopyparty = true
-		}
-		if href, ok := selection.Attr("href"); ok && strings.Contains(href, "/.cpr/w/") {
-			isCopyparty = true
+		for _, attr := range []string{"src", "href"} {
+			v, ok := selection.Attr(attr)
+			if !ok {
+				continue
+			}
+			if strings.Contains(v, "/.cpr/w/") {
+				isCopyparty = true
+				return
+			}
+			// The copyparty basic listing (?b / ?b=u) has no /.cpr/ assets but
+			// exposes ?zip= / ?tar= archive links, which are copyparty-specific.
+			if u, err := url.Parse(v); err == nil && (u.Query().Has("zip") || u.Query().Has("tar")) {
+				isCopyparty = true
+				return
+			}
 		}
 	})
 
