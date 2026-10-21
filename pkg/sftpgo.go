@@ -283,7 +283,7 @@ func (r *RAria2) getSFTPGoLinks(ctx context.Context, urlString string) (files []
 			entryURL = eu.String()
 		} else {
 			// Relative URL, resolve against base
-			entryURL = base.String() + entryURL
+			entryURL = base.ResolveReference(eu).String()
 		}
 		switch e.Type {
 		case "1":

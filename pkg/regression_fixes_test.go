@@ -201,3 +201,32 @@ func TestSFTPGoSessionCookieIsNameValueOnly(t *testing.T) {
 	require.NoError(t, r.SFTPGoLogin(context.Background()))
 	assert.Equal(t, "jwt=sessiontoken", r.SFTPGoSessionCookie)
 }
+
+// Relative entry URLs must resolve against the SFTPGo base URL, not be
+// concatenated onto the host (which produced invalid URLs and dropped entries).
+func TestGetSFTPGoLinksResolvesRelativeURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web/client/dirs" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"name": "rel.zip", "type": "2", "url": "web/client/files?path=%2Frel.zip"},
+				{"name": "abs.zip", "type": "2", "url": "/web/client/files?path=%2Fabs.zip"}
+			]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	base, _ := url.Parse(server.URL + "/web/client/files?path=/")
+	r := New(base)
+	r.DisableRetries = true
+
+	files, dirs, err := r.getSFTPGoLinks(context.Background(), base.String())
+	assert.NoError(t, err)
+	require.Len(t, files, 2)
+	assert.True(t, strings.HasPrefix(files[0], server.URL+"/web/client/files"), "relative URL not resolved: %s", files[0])
+	assert.Contains(t, files[0], "rel.zip")
+	assert.Contains(t, files[1], "abs.zip")
+	assert.Empty(t, dirs)
+}
