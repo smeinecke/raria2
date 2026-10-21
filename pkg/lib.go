@@ -582,14 +582,14 @@ func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, 
 	isHTTP := parsedCUrl.Scheme == "http" || parsedCUrl.Scheme == "https"
 	if len(filters.AcceptMime) > 0 || len(filters.RejectMime) > 0 {
 		if !isHTTP {
-			logrus.Debugf("[W %d]: skipping MIME filtering for non-HTTP(S) URL %s", workerId, cUrl)
+			logrus.Debugf("[W %d]: skipping MIME filtering for non-HTTP(S) URL %s", workerId, logURL(cUrl))
 		} else {
 			contentType, ok := r.sniffHTTPContentTypeWithContext(ctx, workerId, cUrl)
 			if !ok {
 				return
 			}
 			if !filters.MimeAllowed(contentType) {
-				logrus.Debugf("[W %d]: skipping %s due to MIME filter: %s", workerId, cUrl, contentType)
+				logrus.Debugf("[W %d]: skipping %s due to MIME filter: %s", workerId, logURL(cUrl), contentType)
 				return
 			}
 		}
@@ -645,7 +645,7 @@ func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, 
 	}
 
 	if r.DryRun {
-		logrus.Infof("[W %d]: dry run: downloading %s to %s", workerId, cUrl, outputPath)
+		logrus.Infof("[W %d]: dry run: downloading %s to %s", workerId, logURL(cUrl), outputPath)
 	}
 
 	dirPart := path.Dir(outputPath)
