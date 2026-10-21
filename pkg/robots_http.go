@@ -107,11 +107,16 @@ func (r *RAria2) fetchRobotsData(ctx context.Context, scheme, host string) (*rob
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		// Fail open and cache so every URL on this host does not refetch.
+		robotsData := robotstxt.RobotsData{}
+		r.cacheRobotsData(host, &robotsData)
+		return &robotsData, nil
 	}
 	robotsData, err := robotstxt.FromBytes(body)
 	if err != nil {
-		return nil, err
+		robotsData := robotstxt.RobotsData{}
+		r.cacheRobotsData(host, &robotsData)
+		return &robotsData, nil
 	}
 
 	r.cacheRobotsData(host, robotsData)
