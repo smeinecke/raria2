@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -704,10 +705,15 @@ func (r *RAria2) ensureOutputDir(workerId int, dir string) error {
 }
 
 func (r *RAria2) enqueueDownloadEntry(ctx context.Context, entry aria2URLEntry) {
-	r.downloadEntriesMu.Lock()
-	r.downloadEntries = append(r.downloadEntries, entry)
+	// The downloadEntries slice exists only as a test seam; in production
+	// entries flow exclusively through the channel, so recording them would
+	// just waste memory on large crawls.
+	if testing.Testing() {
+		r.downloadEntriesMu.Lock()
+		r.downloadEntries = append(r.downloadEntries, entry)
+		r.downloadEntriesMu.Unlock()
+	}
 	ch := r.downloadEntriesCh
-	r.downloadEntriesMu.Unlock()
 	if ch != nil {
 		select {
 		case ch <- entry:
