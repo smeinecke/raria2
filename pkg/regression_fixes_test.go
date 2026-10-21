@@ -98,3 +98,50 @@ func TestFTPSingleEntrySameNameFileIsDownloaded(t *testing.T) {
 		assert.Equal(t, "ftp://example.com/dir", r.downloadEntries[0].URL)
 	}
 }
+
+// A batch entry with control characters must be skipped, not abort the run.
+func TestBatchDownloadSkipsInvalidEntry(t *testing.T) {
+	batchFile := tempDir(t) + "/batch.txt"
+	am := NewAria2Manager()
+	am.WriteBatch = batchFile
+
+	entries := make(chan aria2URLEntry, 3)
+	entries <- aria2URLEntry{URL: "https://example.com/good1.bin"}
+	entries <- aria2URLEntry{URL: "https://example.com/evil\x01.bin"}
+	entries <- aria2URLEntry{URL: "https://example.com/good2.bin"}
+	close(entries)
+
+	require.NoError(t, am.ExecuteBatchDownload(context.Background(), &RAria2{}, entries))
+
+	data, err := os.ReadFile(batchFile)
+	require.NoError(t, err)
+	content := string(data)
+	assert.Contains(t, content, "https://example.com/good1.bin")
+	assert.Contains(t, content, "https://example.com/good2.bin")
+	assert.NotContains(t, content, "evil")
+}
+
+// A sink-level (non-validation) write error must still abort the run.
+func TestBatchDownloadStillPropagatesSinkErrors(t *testing.T) {
+	am := NewAria2Manager()
+	var wrote []aria2URLEntry
+	am.sinkFactory = func(context.Context, *RAria2) (downloadSink, error) {
+		return &stubDownloadSink{
+			onWrite: func(e aria2URLEntry) error {
+				wrote = append(wrote, e)
+				if len(wrote) == 2 {
+					return fmt.Errorf("disk full")
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	entries := make(chan aria2URLEntry, 3)
+	entries <- aria2URLEntry{URL: "https://example.com/a"}
+	entries <- aria2URLEntry{URL: "https://example.com/b"}
+	entries <- aria2URLEntry{URL: "https://example.com/c"}
+	close(entries)
+
+	assert.Error(t, am.ExecuteBatchDownload(context.Background(), &RAria2{}, entries))
+}

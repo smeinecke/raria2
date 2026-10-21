@@ -3,6 +3,7 @@ package raria2
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -89,12 +90,18 @@ func (am *Aria2Manager) ExecuteBatchDownload(ctx context.Context, raria2 *RAria2
 				return sinkErr
 			}
 		}
-		entryCount++
-		sessionEntryCount++
 		if err := sink.Write(entry); err != nil {
+			// A malformed entry (e.g. control characters from a hostile
+			// listing) must not abort the whole download run.
+			if errors.Is(err, errInvalidBatchEntry) {
+				logrus.Warnf("skipping invalid batch entry %s: %v", logURL(entry.URL), err)
+				continue
+			}
 			_ = flushSession()
 			return err
 		}
+		entryCount++
+		sessionEntryCount++
 		if sessionLimit > 0 && sessionEntryCount >= sessionLimit {
 			if err := flushSession(); err != nil {
 				return err
@@ -275,6 +282,11 @@ func (s *batchFileSink) Close() error {
 	return s.closeErr
 }
 
+// errInvalidBatchEntry marks download entries that cannot be serialized into
+// an aria2 input file. It is distinct from sink I/O errors so the batch loop
+// can skip the offending entry instead of aborting the run.
+var errInvalidBatchEntry = errors.New("batch entry contains control characters")
+
 func containsControlChar(s string) bool {
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f {
@@ -287,7 +299,7 @@ func containsControlChar(s string) bool {
 // writeBatchEntry writes a single entry to the batch writer
 func writeBatchEntry(writer *bufio.Writer, entry aria2URLEntry) error {
 	if containsControlChar(entry.URL) || containsControlChar(entry.Dir) || containsControlChar(entry.Out) {
-		return fmt.Errorf("batch entry contains control characters")
+		return errInvalidBatchEntry
 	}
 	if _, err := fmt.Fprintln(writer, entry.URL); err != nil {
 		return err
