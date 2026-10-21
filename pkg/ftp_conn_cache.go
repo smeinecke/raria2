@@ -228,7 +228,14 @@ func (r *RAria2) ftpConnKey(u *url.URL) (key string, addr string, user string, p
 
 	implicitTLS = strings.ToLower(u.Scheme) == "ftps"
 
-	opts = []ftp.DialOption{ftp.DialWithTimeout(r.HTTPTimeout)}
+	// Reuse the HTTP timeout for FTP control connections; 0 would mean an
+	// unbounded dial, so clamp it like the HTTP client does.
+	dialTimeout := r.HTTPTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = 30 * time.Second
+	}
+
+	opts = []ftp.DialOption{ftp.DialWithTimeout(dialTimeout)}
 	if implicitTLS {
 		tlsCfg := &tls.Config{ServerName: host}
 		if r.SkipCertificateCheck {
