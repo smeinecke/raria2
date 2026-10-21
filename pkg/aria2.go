@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 )
 
 // aria2URLEntry represents a single download entry for aria2
@@ -51,7 +53,8 @@ func (am *Aria2Manager) sessionEntryLimit() int {
 		return 0
 	}
 	if am.WriteBatch != "" {
-		return 0 // Session size ignored when writing batch
+		logrus.Warn("--aria2-session-size is ignored when --write-batch is set")
+		return 0
 	}
 	return am.Aria2EntriesPerSession
 }
@@ -100,11 +103,16 @@ func (am *Aria2Manager) ExecuteBatchDownload(ctx context.Context, raria2 *RAria2
 	}
 
 	if entryCount == 0 {
+		logrus.Info("no downloadable resources found")
 		return nil
 	}
 
 	if err := flushSession(); err != nil {
 		return err
+	}
+
+	if am.WriteBatch != "" {
+		logrus.Infof("wrote aria2 batch file with %d download entries to %s", entryCount, am.WriteBatch)
 	}
 
 	return nil

@@ -344,35 +344,23 @@ func TestWriteBatchFile(t *testing.T) {
 	tmp := tempDir(t)
 	path := filepath.Join(tmp, "batch.txt")
 	r := &RAria2{WriteBatch: path}
-	r.downloadEntries = []aria2URLEntry{{}, {}}
 
-	content := []byte("entry-one\nentry-two\n")
-	assert.NoError(t, r.writeBatchFile(content))
+	sink, err := newBatchFileSink(r.WriteBatch)
+	assert.NoError(t, err)
+	assert.NoError(t, sink.Write(aria2URLEntry{URL: "https://example.com/a.bin", Dir: "d", Out: "a.bin"}))
+	assert.NoError(t, sink.Close())
 
 	written, err := os.ReadFile(path)
 	assert.NoError(t, err)
-	assert.Equal(t, content, written)
+	assert.Equal(t, "https://example.com/a.bin\n  dir=d\n  out=a.bin\n\n", string(written))
 }
 
 func TestWriteBatchFileFailsWithoutDirectory(t *testing.T) {
 	tmp := tempDir(t)
 	path := filepath.Join(tmp, "missing", "batch.txt")
-	r := &RAria2{WriteBatch: path}
 
-	err := r.writeBatchFile([]byte("data"))
+	_, err := newBatchFileSink(path)
 	assert.Error(t, err)
-}
-
-func TestRAria2SessionEntryLimit(t *testing.T) {
-	r := &RAria2{Aria2EntriesPerSession: 3}
-	assert.Equal(t, 3, r.sessionEntryLimit())
-
-	r.Aria2EntriesPerSession = 0
-	assert.Equal(t, 0, r.sessionEntryLimit())
-
-	r.Aria2EntriesPerSession = 10
-	r.WriteBatch = "batch.txt"
-	assert.Equal(t, 0, r.sessionEntryLimit())
 }
 
 func TestMarkVisitedInitializesCache(t *testing.T) {

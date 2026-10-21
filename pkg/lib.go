@@ -190,15 +190,29 @@ func (r *RAria2) FiltersConfig() *FilterManager {
 	return r.Filters
 }
 
-func (r *RAria2) sessionEntryLimit() int {
-	if r.Aria2EntriesPerSession <= 0 {
-		return 0
+// aria2Manager builds an Aria2Manager configured from this client's settings.
+// The SFTPGo session cookie is folded into the aria2 arguments here so it is
+// applied exactly once per manager (and thus once per respawned session).
+func (r *RAria2) aria2Manager() *Aria2Manager {
+	am := NewAria2Manager()
+	am.MaxConnectionPerServer = r.MaxConnectionPerServer
+	am.MaxConcurrentDownload = r.MaxConcurrentDownload
+	am.Aria2EntriesPerSession = r.Aria2EntriesPerSession
+	am.DryRun = r.DryRun
+	am.WriteBatch = r.WriteBatch
+	am.SkipCertificateCheck = r.SkipCertificateCheck
+	am.sinkFactory = r.sinkFactory
+
+	args := r.Aria2AfterURLArgs
+	if r.SFTPGoSessionCookie != "" {
+		args = append(
+			[]string{"--header", "Cookie: " + r.SFTPGoSessionCookie},
+			args...,
+		)
 	}
-	if r.WriteBatch != "" {
-		logrus.Warn("--aria2-session-size is ignored when --write-batch is set")
-		return 0
-	}
-	return r.Aria2EntriesPerSession
+	am.Aria2AfterURLArgs = args
+
+	return am
 }
 
 func (r *RAria2) ensureOutputPath() error {
@@ -677,108 +691,5 @@ func (r *RAria2) enqueueDownloadEntry(ctx context.Context, entry aria2URLEntry) 
 }
 
 func (r *RAria2) executeBatchDownload(ctx context.Context, entries <-chan aria2URLEntry) error {
-	var (
-		sink              downloadSink
-		sinkErr           error
-		entryCount        int
-		sessionEntryCount int
-	)
-
-	sessionLimit := r.sessionEntryLimit()
-	flushSession := func() error {
-		if sink == nil {
-			sessionEntryCount = 0
-			return nil
-		}
-		if err := sink.Close(); err != nil {
-			return err
-		}
-		sink = nil
-		sessionEntryCount = 0
-		return nil
-	}
-
-	for entry := range entries {
-		if sink == nil {
-			sink, sinkErr = r.newDownloadSink(ctx)
-			if sinkErr != nil {
-				return sinkErr
-			}
-		}
-		entryCount++
-		sessionEntryCount++
-		if err := sink.Write(entry); err != nil {
-			_ = flushSession()
-			return err
-		}
-		if sessionLimit > 0 && sessionEntryCount >= sessionLimit {
-			if err := flushSession(); err != nil {
-				return err
-			}
-		}
-	}
-
-	if entryCount == 0 {
-		logrus.Info("no downloadable resources found")
-		return nil
-	}
-
-	if err := flushSession(); err != nil {
-		return err
-	}
-
-	if r.WriteBatch != "" {
-		logrus.Infof("wrote aria2 batch file with %d download entries to %s", entryCount, r.WriteBatch)
-	}
-
-	return nil
-}
-
-func (r *RAria2) newDownloadSink(ctx context.Context) (downloadSink, error) {
-	if r.WriteBatch != "" {
-		return newBatchFileSink(r.WriteBatch)
-	}
-	if r.sinkFactory != nil {
-		return r.sinkFactory(ctx, r)
-	}
-
-	// Create an Aria2Manager for this operation
-	am := NewAria2Manager()
-	am.MaxConnectionPerServer = r.MaxConnectionPerServer
-	am.MaxConcurrentDownload = r.MaxConcurrentDownload
-	am.Aria2EntriesPerSession = r.Aria2EntriesPerSession
-	am.DryRun = r.DryRun
-	am.Aria2AfterURLArgs = r.Aria2AfterURLArgs
-	am.WriteBatch = r.WriteBatch
-	am.SkipCertificateCheck = r.SkipCertificateCheck
-	am.sinkFactory = r.sinkFactory
-
-	// Forward SFTPGo session cookie to aria2c so authenticated downloads work.
-	if r.SFTPGoSessionCookie != "" {
-		am.Aria2AfterURLArgs = append(
-			[]string{"--header", "Cookie: " + r.SFTPGoSessionCookie},
-			am.Aria2AfterURLArgs...,
-		)
-	}
-
-	return newAria2Sink(ctx, am)
-}
-
-func (r *RAria2) writeBatchFile(content []byte) error {
-	file, err := os.Create(r.WriteBatch)
-	if err != nil {
-		return fmt.Errorf("failed to create batch file %s: %w", r.WriteBatch, err)
-	}
-	defer closeQuietly(file)
-
-	if _, err := file.Write(content); err != nil {
-		return fmt.Errorf("failed to write batch file %s: %w", r.WriteBatch, err)
-	}
-
-	r.downloadEntriesMu.Lock()
-	count := len(r.downloadEntries)
-	r.downloadEntriesMu.Unlock()
-	logrus.Infof("wrote aria2 batch file with %d download entries to %s",
-		count, r.WriteBatch)
-	return nil
+	return r.aria2Manager().ExecuteBatchDownload(ctx, r, entries)
 }
