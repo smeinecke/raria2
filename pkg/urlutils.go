@@ -101,7 +101,10 @@ func IsSubPath(subject *url.URL, of *url.URL) bool {
 	}
 
 	if subjectParsed.Scheme != ofParsed.Scheme {
-		return false
+		// Allow http -> https upgrades on the same host.
+		if ofParsed.Scheme != "http" || subjectParsed.Scheme != "https" {
+			return false
+		}
 	}
 
 	basePath := ofParsed.Path

@@ -44,7 +44,7 @@ type cliOptions struct {
 	UserAgent              string        `arg:"--user-agent" help:"Custom User-Agent string" default:"raria2/1.0"`
 	RateLimit              float64       `arg:"--rate-limit" help:"Rate limit for HTTP requests (requests per second)" default:"0"`
 	RespectRobots          bool          `arg:"--respect-robots" help:"Respect robots.txt when crawling" default:"false"`
-	FollowExternal         bool          `arg:"--follow-external" help:"Follow links to external hosts (default: only same host)" default:"false"`
+	FollowExternal         bool          `arg:"--follow-external" help:"Follow links to external hosts (default: stay within the seed URL's host and path prefix)" default:"false"`
 	SFTPGoUser             string        `arg:"--sftpgo-user" help:"SFTPGo web client username (default: extracted from URL)"`
 	SFTPGoPassword         string        `arg:"--sftpgo-password" help:"SFTPGo web client password (default: extracted from URL)"`
 	AcceptMime             []string      `arg:"--accept-mime,separate" help:"Comma-separated list of MIME types to include"`

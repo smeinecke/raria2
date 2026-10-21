@@ -1370,6 +1370,12 @@ func TestIsSubPath(t *testing.T) {
 	assert.False(t, IsSubPath(outside, of))
 }
 
+func TestIsSubPathAllowsHTTPSUpgrade(t *testing.T) {
+	of := mustParseURL(t, "http://example.com/root/")
+	assert.True(t, IsSubPath(mustParseURL(t, "https://example.com/root/file"), of))
+	assert.False(t, IsSubPath(mustParseURL(t, "https://other.com/root/file"), of))
+}
+
 func TestCanonicalURLStripsCredentials(t *testing.T) {
 	assert.Equal(t, "https://example.com/a", canonicalURL("https://user:pass@example.com/a"))
 	assert.Equal(t, "ftp://example.com/a", canonicalURL("ftp://user:pass@example.com/a"))

@@ -97,7 +97,7 @@ raria2 --rate-limit=2 --user-agent='MyBot/1.0' 'https://example.com/pub/'
 # Respect robots.txt while crawling
 raria2 --respect-robots 'https://example.com/pub/'
 
-# Follow links to external hosts (default: only same host)
+# Follow links to external hosts (default: stay within the seed URL's host and path prefix)
 raria2 --follow-external 'https://example.com/pub/'
 
 # MIME-type filtering - only download PDFs and images
