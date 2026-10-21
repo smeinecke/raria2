@@ -101,6 +101,43 @@ func TestEnsureOutputPathDoesNotEscapeCwd(t *testing.T) {
 	assert.Equal(t, filepath.Join("example.com", "escape"), r.OutputPath)
 }
 
+func TestDownloadResource_NonBoundaryPrefixNotRelative(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.com/files")
+	outputDir := tempDir(t)
+	r := &RAria2{
+		url:        baseURL,
+		OutputPath: outputDir,
+		DryRun:     true,
+	}
+
+	// "/files2/x" is not under "/files" even though it shares the prefix.
+	r.downloadResource(1, "https://example.com/files2/x.bin")
+
+	if assert.Len(t, r.downloadEntries, 1) {
+		entry := r.downloadEntries[0]
+		assert.Equal(t, filepath.Join(outputDir, "example.com/files2"), entry.Dir)
+		assert.Equal(t, "x.bin", entry.Out)
+	}
+}
+
+func TestDownloadResource_SetsOutFilename(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.com/root/")
+	outputDir := tempDir(t)
+	r := &RAria2{
+		url:        baseURL,
+		OutputPath: outputDir,
+		DryRun:     true,
+	}
+
+	r.downloadResource(1, "https://example.com/root/assets/img/file.png")
+
+	if assert.Len(t, r.downloadEntries, 1) {
+		entry := r.downloadEntries[0]
+		assert.Equal(t, filepath.Join(outputDir, "assets/img"), entry.Dir)
+		assert.Equal(t, "file.png", entry.Out)
+	}
+}
+
 func TestDownloadResource_PathSafetyEdgeCases(t *testing.T) {
 	baseURL, _ := url.Parse("https://example.com/root/")
 	outputDir := tempDir(t)
