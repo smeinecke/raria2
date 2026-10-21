@@ -29,6 +29,10 @@ archives:
       - goos: windows
         formats: [zip]
 
+release:
+  extra_files:
+    - glob: ./aria2-dist/aria2c-static-*
+
 checksum:
   name_template: checksums.txt
 

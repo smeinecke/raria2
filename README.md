@@ -143,6 +143,11 @@ cadence (or `0` for a single session regardless of detection). This option
 only applies when streaming URLs directly to aria2 (normal mode), not when
 `--write-batch` is used.
 
+Each release also ships `aria2c-static-linux-amd64`, a fully static aria2
+build containing the fix for #1161 - the probe detects it automatically and
+session restarts are skipped entirely. See `contrib/aria2-static/` for the
+reproducible build.
+
 ## Session Management
 
 The `--visited-cache` option allows you to persist visited URLs between runs, enabling resume functionality:

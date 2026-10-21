@@ -23,6 +23,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Cache static OpenSSL
+        uses: actions/cache@v4
+        with:
+          path: .aria2-build/openssl-root
+          key: aria2-openssl-3.5.4-alpine-3.21
+
+      - name: Build patched static aria2c
+        run: contrib/aria2-static/build.sh aria2-dist
+        env:
+          ARIA2_REF: fix-stdin-blocking-1161
+
+      - name: Verify incremental stdin support
+        run: contrib/aria2-static/test-streaming.sh aria2-dist/aria2c-static-linux-amd64
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

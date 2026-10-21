@@ -2,3 +2,6 @@
 output/
 /raria2
 /coverage.out
+/.aria2-build/
+/aria2-dist/
+/dist/
