@@ -15,6 +15,7 @@ import (
 type aria2URLEntry struct {
 	URL string
 	Dir string
+	Out string
 }
 
 // downloadSink interface for different output destinations
@@ -266,7 +267,7 @@ func containsControlChar(s string) bool {
 
 // writeBatchEntry writes a single entry to the batch writer
 func writeBatchEntry(writer *bufio.Writer, entry aria2URLEntry) error {
-	if containsControlChar(entry.URL) || containsControlChar(entry.Dir) {
+	if containsControlChar(entry.URL) || containsControlChar(entry.Dir) || containsControlChar(entry.Out) {
 		return fmt.Errorf("batch entry contains control characters")
 	}
 	if _, err := fmt.Fprintln(writer, entry.URL); err != nil {
@@ -274,6 +275,11 @@ func writeBatchEntry(writer *bufio.Writer, entry aria2URLEntry) error {
 	}
 	if entry.Dir != "" {
 		if _, err := fmt.Fprintf(writer, "  dir=%s\n", entry.Dir); err != nil {
+			return err
+		}
+	}
+	if entry.Out != "" {
+		if _, err := fmt.Fprintf(writer, "  out=%s\n", entry.Out); err != nil {
 			return err
 		}
 	}
