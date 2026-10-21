@@ -221,14 +221,17 @@ func (r *RAria2) ensureOutputPath() error {
 			return fmt.Errorf("unable to derive output path: source URL is nil")
 		}
 		host := r.url.Host
-		path := strings.Trim(r.url.Path, "/")
+		relPath, ok := safeRelativeOutputPath(r.url.Path)
+		if !ok {
+			return fmt.Errorf("unable to derive output path: unsafe source URL path %q", r.url.Path)
+		}
 		if host == "" {
 			host = "download"
 		}
-		if path == "" {
+		if relPath == "" {
 			r.OutputPath = host
 		} else {
-			r.OutputPath = filepath.Join(host, filepath.FromSlash(path))
+			r.OutputPath = filepath.Join(host, filepath.FromSlash(relPath))
 		}
 	}
 	if _, err := os.Stat(r.OutputPath); os.IsNotExist(err) {

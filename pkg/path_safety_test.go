@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,6 +83,22 @@ func TestDownloadResource_PathSafety(t *testing.T) {
 			r.downloadEntries = nil
 		})
 	}
+}
+
+func TestEnsureOutputPathDoesNotEscapeCwd(t *testing.T) {
+	origDir, err := os.Getwd()
+	assert.NoError(t, err)
+	tmp := tempDir(t)
+	assert.NoError(t, os.Chdir(tmp))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	base := mustParseURL(t, "https://example.com/../../escape")
+	r := &RAria2{url: base, urlCache: NewURLCache("")}
+
+	assert.NoError(t, r.ensureOutputPath())
+	// Dot segments in the seed URL path must be collapsed inside the output
+	// directory, never outside it.
+	assert.Equal(t, filepath.Join("example.com", "escape"), r.OutputPath)
 }
 
 func TestDownloadResource_PathSafetyEdgeCases(t *testing.T) {
