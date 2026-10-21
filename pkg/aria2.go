@@ -226,11 +226,11 @@ func (s *aria2Sink) Close() error {
 	s.closeOnce.Do(func() {
 		if err := s.writer.Flush(); err != nil {
 			s.closeErr = err
-			return
 		}
+		// Always close the pipe and wait for the process so a failed flush
+		// does not leave aria2c blocked on stdin forever.
 		if err := s.pipe.Close(); err != nil && s.closeErr == nil {
 			s.closeErr = err
-			return
 		}
 		if waitErr := <-s.waitCh; waitErr != nil && s.closeErr == nil {
 			s.closeErr = fmt.Errorf("aria2 batch command failed: %w", waitErr)
