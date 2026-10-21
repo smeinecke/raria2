@@ -395,22 +395,22 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 	cUrl := entry.url
 	parsedURL, err := url.Parse(cUrl)
 	if err != nil {
-		logrus.Warnf("skipping invalid URL %s: %v", cUrl, err)
+		logrus.Warnf("skipping invalid URL %s: %v", logURL(cUrl), err)
 		return
 	}
 
 	if !filters.PathAllowed(parsedURL) {
-		logrus.Debugf("path filters skipped %s", cUrl)
+		logrus.Debugf("path filters skipped %s", logURL(cUrl))
 		return
 	}
 
 	if r.RespectRobots && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && !r.urlAllowedByRobots(ctx, parsedURL) {
-		logrus.Debugf("robots.txt disallowed %s", cUrl)
+		logrus.Debugf("robots.txt disallowed %s", logURL(cUrl))
 		return
 	}
 
 	if !r.markVisited(cUrl) {
-		logrus.WithField("url", cUrl).Debug("skipping already visited")
+		logrus.WithField("url", logURL(cUrl)).Debug("skipping already visited")
 		return
 	}
 
@@ -438,7 +438,7 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 	if IsSFTPGoURL(cUrl) {
 		files, dirs, err := r.getSFTPGoLinks(ctx, cUrl)
 		if err != nil {
-			logrus.Warnf("unable to fetch SFTPGo listing %v: %v", cUrl, err)
+			logrus.Warnf("unable to fetch SFTPGo listing %v: %v", logURL(cUrl), err)
 			return
 		}
 
@@ -451,15 +451,15 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		for _, link := range files {
 			parsedLink, err := url.Parse(link)
 			if err != nil {
-				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				logrus.Debugf("skipping invalid discovered URL %s: %v", logURL(link), err)
 				continue
 			}
 			if !filters.PathAllowed(parsedLink) {
-				logrus.Debugf("path filters skipped %s", link)
+				logrus.Debugf("path filters skipped %s", logURL(link))
 				continue
 			}
 			if !r.markVisited(link) {
-				logrus.WithField("url", link).Debug("skipping already visited")
+				logrus.WithField("url", logURL(link)).Debug("skipping already visited")
 				continue
 			}
 			r.downloadResourceWithContext(ctx, workerId, link)
@@ -469,15 +469,15 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 		for _, link := range dirs {
 			parsedLink, err := url.Parse(link)
 			if err != nil {
-				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				logrus.Debugf("skipping invalid discovered URL %s: %v", logURL(link), err)
 				continue
 			}
 			if !filters.PathAllowed(parsedLink) {
-				logrus.Debugf("path filters skipped %s", link)
+				logrus.Debugf("path filters skipped %s", logURL(link))
 				continue
 			}
 			if !enqueue(crawlEntry{url: link, depth: nextDepth}) {
-				logrus.Debugf("skipping enqueue for %s due to context cancellation", link)
+				logrus.Debugf("skipping enqueue for %s due to context cancellation", logURL(link))
 			}
 		}
 		return
@@ -489,7 +489,7 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 			r.downloadResourceWithContext(ctx, workerId, cUrl)
 			return
 		}
-		logrus.Warnf("unable to fetch %v: %v", cUrl, err)
+		logrus.Warnf("unable to fetch %v: %v", logURL(cUrl), err)
 		return
 	}
 
@@ -501,15 +501,15 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 	enqueueLink := func(link string) {
 		parsedLink, err := url.Parse(link)
 		if err != nil {
-			logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+			logrus.Debugf("skipping invalid discovered URL %s: %v", logURL(link), err)
 			return
 		}
 		if !filters.PathAllowed(parsedLink) {
-			logrus.Debugf("path filters skipped %s", link)
+			logrus.Debugf("path filters skipped %s", logURL(link))
 			return
 		}
 		if !enqueue(crawlEntry{url: link, depth: nextDepth}) {
-			logrus.Debugf("skipping enqueue for %s due to context cancellation", link)
+			logrus.Debugf("skipping enqueue for %s due to context cancellation", logURL(link))
 		}
 	}
 
@@ -522,15 +522,15 @@ func (r *RAria2) processCrawlEntry(ctx context.Context, workerId int, entry craw
 			}
 			parsedLink, err := url.Parse(link)
 			if err != nil {
-				logrus.Debugf("skipping invalid discovered URL %s: %v", link, err)
+				logrus.Debugf("skipping invalid discovered URL %s: %v", logURL(link), err)
 				continue
 			}
 			if !filters.PathAllowed(parsedLink) {
-				logrus.Debugf("path filters skipped %s", link)
+				logrus.Debugf("path filters skipped %s", logURL(link))
 				continue
 			}
 			if !r.markVisited(link) {
-				logrus.WithField("url", link).Debug("skipping already visited")
+				logrus.WithField("url", logURL(link)).Debug("skipping already visited")
 				continue
 			}
 			r.downloadResourceWithContext(ctx, workerId, link)
@@ -556,22 +556,22 @@ func (r *RAria2) downloadResource(workerId int, cUrl string) {
 func (r *RAria2) downloadResourceWithContext(ctx context.Context, workerId int, cUrl string) {
 	parsedCUrl, err := url.Parse(cUrl)
 	if err != nil {
-		logrus.Warnf("[W %d]: unable to download %v because it's an invalid URL: %v", workerId, cUrl, err)
+		logrus.Warnf("[W %d]: unable to download %v because it's an invalid URL: %v", workerId, logURL(cUrl), err)
 		return
 	}
 
 	filters := r.FiltersConfig()
 	if !filters.PathAllowed(parsedCUrl) {
-		logrus.Debugf("[W %d]: skipping %s due to path filters", workerId, cUrl)
+		logrus.Debugf("[W %d]: skipping %s due to path filters", workerId, logURL(cUrl))
 		return
 	}
 	if !filters.ExtensionAllowed(parsedCUrl) {
-		logrus.Debugf("[W %d]: skipping %s due to extension filters", workerId, cUrl)
+		logrus.Debugf("[W %d]: skipping %s due to extension filters", workerId, logURL(cUrl))
 		return
 	}
 
 	if !filters.FilenameAllowed(parsedCUrl) {
-		logrus.Debugf("[W %d]: skipping %s due to filename filters", workerId, cUrl)
+		logrus.Debugf("[W %d]: skipping %s due to filename filters", workerId, logURL(cUrl))
 		return
 	}
 

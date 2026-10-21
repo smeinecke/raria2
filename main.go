@@ -96,13 +96,15 @@ func run(opts *cliOptions) error {
 		cancel()
 	}()
 
-	// Extract credentials from URL and strip them so they don't leak into requests.
+	// Extract credentials from the URL for SFTPGo defaults. The userinfo stays
+	// on the URL so FTP logins and HTTP basic auth keep working (aria2 also
+	// consumes it from the download URIs). canonicalURL strips it again for
+	// cache/dedup and log lines redact it.
 	urlUser := ""
 	urlPass := ""
 	if parsedURL.User != nil {
 		urlUser = parsedURL.User.Username()
 		urlPass, _ = parsedURL.User.Password()
-		parsedURL.User = nil
 	}
 
 	client := raria2.New(parsedURL)

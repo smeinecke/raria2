@@ -181,7 +181,7 @@ func getLinks(originalUrl *url.URL, baseUrl *url.URL, followExternal bool, body 
 
 		aHrefUrl, err := url.Parse(val)
 		if err != nil {
-			logrus.Infof("skipping %v because it is not a valid URL", val)
+			logrus.Infof("skipping %v because it is not a valid URL", logURL(val))
 			return
 		}
 

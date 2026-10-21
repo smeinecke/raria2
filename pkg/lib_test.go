@@ -1370,6 +1370,11 @@ func TestIsSubPath(t *testing.T) {
 	assert.False(t, IsSubPath(outside, of))
 }
 
+func TestCanonicalURLStripsCredentials(t *testing.T) {
+	assert.Equal(t, "https://example.com/a", canonicalURL("https://user:pass@example.com/a"))
+	assert.Equal(t, "ftp://example.com/a", canonicalURL("ftp://user:pass@example.com/a"))
+}
+
 func newTestClient(baseURL *url.URL) *RAria2 {
 	r := New(baseURL)
 	r.DryRun = true

@@ -22,6 +22,10 @@ func canonicalURL(raw string) string {
 	// Normalize scheme to lowercase
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 
+	// Never persist credentials in canonical form: they must not end up in the
+	// visited-URL cache file and do not change a resource's identity for dedup.
+	parsed.User = nil
+
 	// Normalize host to lowercase
 	if parsed.Host != "" {
 		parsed.Host = strings.ToLower(parsed.Host)
@@ -67,6 +71,15 @@ func canonicalURL(raw string) string {
 	}
 
 	return parsed.String()
+}
+
+// logURL returns a URL string safe for logging (credentials redacted).
+func logURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	return u.Redacted()
 }
 
 // SameUrl checks if two URLs are considered the same using canonicalization
