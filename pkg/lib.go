@@ -236,7 +236,7 @@ func (r *RAria2) ensureOutputPath() error {
 		}
 	}
 	if _, err := os.Stat(r.OutputPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(r.OutputPath, 0o755); err != nil {
+		if err := os.MkdirAll(r.OutputPath, 0o750); err != nil {
 			return err
 		}
 	}
@@ -697,7 +697,7 @@ func (r *RAria2) ensureOutputDir(workerId int, dir string) error {
 			logrus.Infof("[W %d]: dry run: creating folder %s", workerId, dir)
 			return nil
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 	}

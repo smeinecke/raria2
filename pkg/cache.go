@@ -86,13 +86,13 @@ func (uc *URLCache) Save() error {
 
 	dir := filepath.Dir(uc.path)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 	}
 
 	tmpPath := uc.path + ".tmp"
-	file, err := os.Create(tmpPath)
+	file, err := os.Create(tmpPath) // #nosec G304 -- path is the user-provided cache file flag
 	if err != nil {
 		return err
 	}

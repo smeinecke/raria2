@@ -256,7 +256,7 @@ type batchFileSink struct {
 
 // newBatchFileSink creates a new batch file sink
 func newBatchFileSink(path string) (downloadSink, error) {
-	file, err := os.Create(path)
+	file, err := os.Create(path) // #nosec G304 -- path is the user-provided batch output flag
 	if err != nil {
 		return nil, fmt.Errorf("failed to create batch file %s: %w", path, err)
 	}

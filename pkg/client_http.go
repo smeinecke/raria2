@@ -83,7 +83,7 @@ func (c *HTTPClient) doWithRetry(req *http.Request, enableRetries bool) (*http.R
 		if attempt > 0 {
 			// Exponential backoff with jitter
 			delay := c.baseDelay * time.Duration(1<<(attempt-1))
-			jitter := time.Duration(float64(delay) * 0.1 * (0.5 + 0.5*rand.Float64()))
+			jitter := time.Duration(float64(delay) * 0.1 * (0.5 + 0.5*rand.Float64())) // #nosec G404 -- retry jitter does not need crypto randomness
 
 			timer := time.NewTimer(delay + jitter)
 			select {
@@ -210,7 +210,7 @@ func (r *RAria2) client() *HTTPClient {
 			} else {
 				transport = &http.Transport{}
 			}
-			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- opt-in via aria2 --check-certificate=false
 			r.httpClient.client.Transport = transport
 		}
 	})
