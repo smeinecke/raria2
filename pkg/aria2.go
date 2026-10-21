@@ -277,7 +277,7 @@ func (s *batchFileSink) Close() error {
 
 func containsControlChar(s string) bool {
 	for _, r := range s {
-		if r < 0x20 {
+		if r < 0x20 || r == 0x7f {
 			return true
 		}
 	}

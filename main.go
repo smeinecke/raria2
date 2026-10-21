@@ -92,8 +92,11 @@ func run(opts *cliOptions) error {
 	defer signal.Stop(sigChan)
 	go func() {
 		sig := <-sigChan
-		logrus.Infof("Received signal %v, shutting down gracefully...", sig)
+		logrus.Infof("Received signal %v, shutting down gracefully (send again to force quit)...", sig)
 		cancel()
+		<-sigChan
+		logrus.Warn("Received second signal, forcing exit")
+		os.Exit(130)
 	}()
 
 	// Extract credentials from the URL for SFTPGo defaults. The userinfo stays

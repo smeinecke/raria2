@@ -259,8 +259,6 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	if err := r.ensureOutputPath(); err != nil {
 		return err
 	}
-	dir, _ := os.Getwd()
-	logrus.Infof("pwd: %v", dir)
 
 	// Auto-detect and authenticate SFTPGo web client instances.
 	if IsSFTPGoURL(r.url.String()) {
