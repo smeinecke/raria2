@@ -264,7 +264,24 @@ func (r *RAria2) getSFTPGoLinks(ctx context.Context, urlString string) (files []
 	base := r.sftpgoBaseURL()
 	for _, e := range entries {
 		entryURL := e.URL
-		if !strings.HasPrefix(entryURL, "http") {
+		eu, parseErr := url.Parse(entryURL)
+		if parseErr != nil {
+			logrus.Debugf("skipping SFTPGo entry with invalid URL %q: %v", e.URL, parseErr)
+			continue
+		}
+		if strings.HasPrefix(entryURL, "//") {
+			// Scheme-relative URL: inherit the seed scheme so the host check applies.
+			eu.Scheme = base.Scheme
+		}
+		if eu.IsAbs() {
+			// Absolute URLs must stay on the same host unless external links
+			// are allowed; a listing must not steer downloads to other hosts.
+			if !strings.EqualFold(eu.Host, base.Host) && !r.FollowExternal {
+				logrus.Debugf("skipping SFTPGo entry on different host: %s", logURL(eu.String()))
+				continue
+			}
+			entryURL = eu.String()
+		} else {
 			// Relative URL, resolve against base
 			entryURL = base.String() + entryURL
 		}

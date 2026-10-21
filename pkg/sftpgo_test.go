@@ -177,6 +177,37 @@ func TestGetSFTPGoLinks_EmptyDir(t *testing.T) {
 	assert.Empty(t, dirs)
 }
 
+func TestGetSFTPGoLinksSkipsForeignHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web/client/dirs" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"name": "file1.zip", "type": "2", "url": "/web/client/files?path=%2Ffile1.zip&_=1"},
+				{"name": "evil.bin", "type": "2", "url": "https://evil.example.com/steal.bin"}
+			]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	base, _ := url.Parse(server.URL + "/web/client/files?path=/")
+	r := New(base)
+	r.DisableRetries = true
+
+	files, dirs, err := r.getSFTPGoLinks(context.Background(), base.String())
+	assert.NoError(t, err)
+	assert.Len(t, files, 1)
+	assert.Contains(t, files[0], "file1.zip")
+	assert.Empty(t, dirs)
+
+	// With FollowExternal the foreign URL is allowed through.
+	r.FollowExternal = true
+	files, _, err = r.getSFTPGoLinks(context.Background(), base.String())
+	assert.NoError(t, err)
+	assert.Len(t, files, 2)
+}
+
 func TestDownloadResourceSFTPGoUsesPathParam(t *testing.T) {
 	outputDir := tempDir(t)
 	base := mustParseURL(t, "https://example.com/web/client/files?path=/base/")
