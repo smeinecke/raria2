@@ -46,22 +46,39 @@ func canonicalURL(raw string) string {
 	// Always strip fragments
 	parsed.Fragment = ""
 
-	// Normalize path by cleaning dot-segments.
-	// Note: this also collapses multiple slashes.
-	if parsed.Path == "" {
-		parsed.Path = "/"
+	// Normalize path by cleaning dot-segments. Work on the normalized escaped
+	// form so that percent-encoded slashes (e.g. %2F) stay distinct from
+	// literal ones instead of collapsing into the same key.
+	escaped := parsed.EscapedPath()
+	if escaped == "" {
+		escaped = "/"
+	}
+	cleanedEscaped := path.Clean(normalizeEscapedPath(escaped))
+	if cleanedEscaped == "." {
+		cleanedEscaped = "/"
+	}
+	if unescaped, uerr := url.PathUnescape(cleanedEscaped); uerr == nil {
+		parsed.Path = unescaped
+		if cleanedEscaped == unescaped {
+			parsed.RawPath = ""
+		} else {
+			parsed.RawPath = cleanedEscaped
+		}
 	} else {
 		parsed.Path = path.Clean(parsed.Path)
 		if parsed.Path == "." {
 			parsed.Path = "/"
 		}
+		parsed.RawPath = ""
 	}
-	parsed.RawPath = ""
 
 	// Normalize path - but preserve root path
 	if parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/") {
 		// Remove trailing slashes for consistency (except root)
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+		if parsed.RawPath != "" {
+			parsed.RawPath = strings.TrimSuffix(parsed.RawPath, "/")
+		}
 	}
 
 	// For directory-style paths (ending with / in the original path) or root paths with query params,
@@ -71,6 +88,64 @@ func canonicalURL(raw string) string {
 	}
 
 	return parsed.String()
+}
+
+// normalizeEscapedPath canonicalizes percent-escapes in a URL path: hex digits
+// are uppercased and unreserved characters (RFC 3986) are decoded, so e.g.
+// "%41" becomes "A" and "%2f" becomes "%2F". Escapes of reserved characters
+// such as %2F are preserved so they remain distinguishable from literal ones.
+func normalizeEscapedPath(p string) string {
+	if !strings.Contains(p, "%") {
+		return p
+	}
+	var b strings.Builder
+	b.Grow(len(p))
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c == '%' && i+2 < len(p) {
+			hi, ok1 := unhexDigit(p[i+1])
+			lo, ok2 := unhexDigit(p[i+2])
+			if ok1 && ok2 {
+				v := hi<<4 | lo
+				if isUnreservedByte(v) {
+					b.WriteByte(v)
+				} else {
+					const hexDigits = "0123456789ABCDEF"
+					b.WriteByte('%')
+					b.WriteByte(hexDigits[hi])
+					b.WriteByte(hexDigits[lo])
+				}
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func unhexDigit(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func isUnreservedByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '-', c == '.', c == '_', c == '~':
+		return true
+	default:
+		return false
+	}
 }
 
 // logURL returns a URL string safe for logging (credentials redacted).

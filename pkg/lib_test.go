@@ -1384,6 +1384,14 @@ func TestCanonicalURLStripsCredentials(t *testing.T) {
 	assert.Equal(t, "ftp://example.com/a", canonicalURL("ftp://user:pass@example.com/a"))
 }
 
+func TestCanonicalURLKeepsEncodedSlashDistinct(t *testing.T) {
+	// %2F-encoded slashes must not collapse into literal-slash paths.
+	assert.NotEqual(t, canonicalURL("https://example.com/a/b"), canonicalURL("https://example.com/a%2Fb"))
+	// Hex casing and unreserved characters normalize canonically.
+	assert.Equal(t, canonicalURL("https://example.com/a%2Fb"), canonicalURL("https://example.com/a%2fb"))
+	assert.Equal(t, canonicalURL("https://example.com/aAb"), canonicalURL("https://example.com/a%41b"))
+}
+
 func newTestClient(baseURL *url.URL) *RAria2 {
 	r := New(baseURL)
 	r.DryRun = true
