@@ -152,3 +152,23 @@ func TestCanonicalURLFTPDefaultPorts(t *testing.T) {
 	assert.Equal(t, canonicalURL("ftps://example.com/"), canonicalURL("ftps://example.com:990/"))
 	assert.NotEqual(t, canonicalURL("ftp://example.com/"), canonicalURL("ftp://example.com:2121/"))
 }
+
+// The detection marker must match any SFTPGo major version, not just 2.x.
+func TestDetectSFTPGoV3(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/web/client/login" {
+			_, _ = w.Write([]byte("<html><script>$('title').text('SFTPGo 3.1 WebClient');</script></html>"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	base, _ := url.Parse(server.URL + "/web/client/files?path=/")
+	r := New(base)
+	r.DisableRetries = true
+
+	detected, err := r.DetectSFTPGo(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, detected)
+}

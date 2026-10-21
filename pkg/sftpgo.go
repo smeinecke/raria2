@@ -17,6 +17,10 @@ import (
 const sftpgoLoginPath = "/web/client/login"
 const sftpgoDirsPath = "/web/client/dirs"
 
+// sftpgoVersionMarker matches the version string embedded in the web client
+// login page (e.g. 'SFTPGo 2.7.6'), without pinning a major version.
+var sftpgoVersionMarker = regexp.MustCompile(`'SFTPGo \d+\.\d+`)
+
 // IsSFTPGoURL checks whether the URL path suggests an SFTPGo web client endpoint.
 func IsSFTPGoURL(raw string) bool {
 	u, err := url.Parse(raw)
@@ -52,7 +56,8 @@ func (r *RAria2) DetectSFTPGo(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("failed to read SFTPGo login page: %w", err)
 	}
 
-	return strings.Contains(string(body), "'SFTPGo 2."), nil
+	// The login page embeds the server version as 'SFTPGo <major>.<minor>.<patch>.
+	return sftpgoVersionMarker.Match(body), nil
 }
 
 // SFTPGoLogin performs the two-step SFTPGo web-client login and stores the
