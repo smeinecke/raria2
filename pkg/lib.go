@@ -293,7 +293,11 @@ func (r *RAria2) RunWithContext(ctx context.Context) error {
 	downloadErr := <-downloadErrCh
 
 	if err := r.saveVisitedCache(); err != nil {
-		return fmt.Errorf("failed saving visited cache: %w", err)
+		if downloadErr != nil {
+			logrus.Warnf("failed saving visited cache: %v", err)
+		} else {
+			return fmt.Errorf("failed saving visited cache: %w", err)
+		}
 	}
 
 	return downloadErr
