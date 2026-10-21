@@ -3,6 +3,7 @@ package raria2
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -81,7 +82,14 @@ func (c *HTTPClient) doWithRetry(req *http.Request, enableRetries bool) (*http.R
 			// Exponential backoff with jitter
 			delay := c.baseDelay * time.Duration(1<<(attempt-1))
 			jitter := time.Duration(float64(delay) * 0.1 * (0.5 + 0.5*rand.Float64()))
-			time.Sleep(delay + jitter)
+
+			timer := time.NewTimer(delay + jitter)
+			select {
+			case <-req.Context().Done():
+				timer.Stop()
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
 
 			logrus.Debugf("Retrying HTTP request (attempt %d/%d)", attempt+1, c.retryCount)
 		}
@@ -93,6 +101,8 @@ func (c *HTTPClient) doWithRetry(req *http.Request, enableRetries bool) (*http.R
 			// Check for transient HTTP errors
 			if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 				lastErr = fmt.Errorf("HTTP %d: transient error", resp.StatusCode)
+				// Drain a bit so the connection can be reused for the retry.
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 				closeQuietly(resp.Body)
 				continue
 			}
