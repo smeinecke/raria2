@@ -230,3 +230,16 @@ func TestGetSFTPGoLinksResolvesRelativeURLs(t *testing.T) {
 	assert.Contains(t, files[1], "abs.zip")
 	assert.Empty(t, dirs)
 }
+
+// net.Error timeouts are transient even when their message contains none of
+// the known patterns.
+type netTimeoutError struct{}
+
+func (netTimeoutError) Error() string   { return "i/o deadline exceeded" }
+func (netTimeoutError) Timeout() bool   { return true }
+func (netTimeoutError) Temporary() bool { return false }
+
+func TestIsTransientErrorNetTimeout(t *testing.T) {
+	assert.True(t, IsTransientError(netTimeoutError{}))
+	assert.False(t, IsTransientError(fmt.Errorf("permanent failure")))
+}

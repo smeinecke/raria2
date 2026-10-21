@@ -2,9 +2,11 @@ package raria2
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -150,6 +152,11 @@ func (c *HTTPClient) waitForRateLimit() {
 
 // IsTransientError checks if an error is transient and worth retrying
 func IsTransientError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
 	errStr := err.Error()
 
 	// Common transient error patterns
