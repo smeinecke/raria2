@@ -118,6 +118,14 @@ func (am *Aria2Manager) ExecuteBatchDownload(ctx context.Context, raria2 *RAria2
 	return nil
 }
 
+// discardSink accepts download entries without writing them anywhere. It is
+// used for dry runs so that no aria2c process (or binary requirement) is
+// needed to preview what would be downloaded.
+type discardSink struct{}
+
+func (discardSink) Write(aria2URLEntry) error { return nil }
+func (discardSink) Close() error              { return nil }
+
 // newDownloadSink creates the appropriate download sink
 func (am *Aria2Manager) newDownloadSink(ctx context.Context, raria2 *RAria2) (downloadSink, error) {
 	if am.WriteBatch != "" {
@@ -125,6 +133,9 @@ func (am *Aria2Manager) newDownloadSink(ctx context.Context, raria2 *RAria2) (do
 	}
 	if am.sinkFactory != nil {
 		return am.sinkFactory(ctx, raria2)
+	}
+	if am.DryRun {
+		return discardSink{}, nil
 	}
 	return newAria2Sink(ctx, am)
 }

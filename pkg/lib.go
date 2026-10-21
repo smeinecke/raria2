@@ -246,7 +246,7 @@ var errNotHTML = errors.New("content is not HTML")
 
 func (r *RAria2) RunWithContext(ctx context.Context) error {
 	defer r.ftpConnCacheCloseAll()
-	if r.WriteBatch == "" && r.sinkFactory == nil {
+	if r.WriteBatch == "" && r.sinkFactory == nil && !r.DryRun {
 		if _, err := lookPath("aria2c"); err != nil {
 			return fmt.Errorf("aria2c is required but was not found in PATH: %w", err)
 		}
