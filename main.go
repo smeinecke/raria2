@@ -267,6 +267,12 @@ func globToRegex(glob string) string {
 		switch ch {
 		case '*':
 			if i+1 < len(glob) && glob[i+1] == '*' {
+				// Globstar: `**/` matches zero or more directories.
+				if i+2 < len(glob) && glob[i+2] == '/' {
+					b.WriteString("(?:.*/)?")
+					i += 3
+					continue
+				}
 				b.WriteString(".*")
 				i += 2
 				continue

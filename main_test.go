@@ -286,7 +286,17 @@ func TestGlobToRegex(t *testing.T) {
 		{
 			name:     "complex pattern",
 			glob:     "/static/**/*.css",
-			expected: "^/static/.*/[^/]*\\.css$",
+			expected: "^/static/(?:.*/)?[^/]*\\.css$",
+		},
+		{
+			name:     "globstar matches zero directories",
+			glob:     "**/*.txt",
+			expected: "^(?:.*/)?[^/]*\\.txt$",
+		},
+		{
+			name:     "globstar without slash",
+			glob:     "a/**",
+			expected: "^a/.*$",
 		},
 	}
 
