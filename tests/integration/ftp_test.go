@@ -8,6 +8,7 @@ import (
 
 	ftpserver "github.com/fclairamb/ftpserverlib"
 	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,4 +73,17 @@ func TestFTPCrawl(t *testing.T) {
 
 	require.NotEmpty(t, entries)
 	assertFixtureFiles(t, entries, "")
+}
+
+// A directory holding a single file named like the directory itself produces
+// the same single-entry LIST response as LISTing the file directly. The
+// crawler must disambiguate via the parent listing and still crawl it.
+func TestFTPSameNameDirIsCrawled(t *testing.T) {
+	addr := startFTPServer(t, fixtureDir)
+
+	entries := runCrawl(t, "ftp://"+ftpUser+":"+ftpPass+"@"+addr+"/samename", nil)
+
+	require.NotEmpty(t, entries)
+	urls := entryURLs(entries)
+	assert.Contains(t, urls, "ftp://"+ftpUser+":"+ftpPass+"@"+addr+"/samename/samename")
 }

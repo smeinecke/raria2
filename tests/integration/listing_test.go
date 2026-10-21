@@ -29,6 +29,7 @@ func siteFiles(containerRoot string) []testcontainers.ContainerFile {
 		mount("file1.txt"),
 		mount("file2.bin"),
 		mount("sub/file3.txt"),
+		mount("samename/samename"),
 	}
 }
 

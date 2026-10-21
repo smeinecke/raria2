@@ -68,10 +68,57 @@ func ftpListError(u *url.URL, err error) error {
 }
 
 func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+	var out []ftpListingEntry
 	if r.ftpList != nil {
-		return r.ftpList(ctx, u)
+		var err error
+		out, err = r.ftpList(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		entries, err := r.ftpListRaw(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+
+		out = make([]ftpListingEntry, 0, len(entries))
+		for _, e := range entries {
+			if e == nil {
+				continue
+			}
+			if e.Name == "" || e.Name == "." || e.Name == ".." {
+				continue
+			}
+			// Symbolic links are skipped on purpose: their target type is
+			// unknown and link cycles would produce unbounded crawl paths.
+			if e.Type == ftp.EntryTypeLink {
+				continue
+			}
+			out = append(out, ftpListingEntry{name: e.Name, isDir: e.Type == ftp.EntryTypeFolder})
+		}
 	}
 
+	if !strings.HasSuffix(u.Path, "/") && len(out) == 1 && !out[0].isDir && matchesFTPPathName(out[0].name, u) {
+		// Ambiguous: a directory containing a single file named like the
+		// directory produces the exact same listing. Consult the parent
+		// listing to find out what u.Path really is.
+		if !r.ftpIsDirectory(ctx, u) {
+			return nil, errNotHTML
+		}
+	}
+
+	return out, nil
+}
+
+// matchesFTPPathName reports whether a LIST entry name refers to u itself;
+// servers variously return the basename or the full server-side path.
+func matchesFTPPathName(name string, u *url.URL) bool {
+	return name == path.Base(u.Path) || name == strings.TrimPrefix(u.Path, "/") || name == u.Path
+}
+
+// ftpListRaw performs the LIST request over the connection pool, with a fresh
+// connection retry on failure.
+func (r *RAria2) ftpListRaw(ctx context.Context, u *url.URL) ([]*ftp.Entry, error) {
 	listPath := u.Path
 	if listPath == "" {
 		listPath = "/"
@@ -112,31 +159,33 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 	}
 
 	logger.WithField("entry_count", len(entries)).Debug("FTP LIST: request succeeded")
+	return entries, nil
+}
 
-	if !strings.HasSuffix(u.Path, "/") {
-		// Some servers answer LIST on a file path with the file itself; the name
-		// may be the basename or the full server-side path.
-		base := path.Base(u.Path)
-		full := strings.TrimPrefix(u.Path, "/")
-		if len(entries) == 1 && entries[0] != nil && entries[0].Type == ftp.EntryTypeFile &&
-			(entries[0].Name == base || entries[0].Name == full || entries[0].Name == u.Path) {
-			return nil, errNotHTML
+// ftpIsDirectory disambiguates a path whose LIST returned a single same-named
+// file entry by looking the path up in its parent directory listing. When the
+// type cannot be determined it returns false so callers keep treating the
+// path as a file.
+func (r *RAria2) ftpIsDirectory(ctx context.Context, u *url.URL) bool {
+	parent := *u
+	parentPath := path.Dir(u.Path)
+	if parentPath == "." || parentPath == "" {
+		parentPath = "/"
+	}
+	if !strings.HasSuffix(parentPath, "/") {
+		parentPath += "/"
+	}
+	parent.Path = parentPath
+	parent.RawPath = ""
+
+	parentEntries, err := r.ftpListEntries(ctx, &parent)
+	if err != nil {
+		return false
+	}
+	for _, e := range parentEntries {
+		if matchesFTPPathName(e.name, u) {
+			return e.isDir
 		}
 	}
-
-	out := make([]ftpListingEntry, 0, len(entries))
-	for _, e := range entries {
-		if e == nil {
-			continue
-		}
-		if e.Name == "" || e.Name == "." || e.Name == ".." {
-			continue
-		}
-		if e.Type == ftp.EntryTypeLink {
-			continue
-		}
-		out = append(out, ftpListingEntry{name: e.Name, isDir: e.Type == ftp.EntryTypeFolder})
-	}
-
-	return out, nil
+	return false
 }

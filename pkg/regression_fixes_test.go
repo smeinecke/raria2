@@ -44,3 +44,57 @@ func TestSniffFallsBackToPlainGetOnRangeReject(t *testing.T) {
 	r.downloadResource(1, server.URL+"/test.zip")
 	assert.Len(t, r.downloadEntries, 1, "file should be queued once the plain-GET sniff succeeds")
 }
+
+// ftp://host/dir where /dir contains a single file named "dir" must be treated
+// as a directory, not as a file download.
+func TestFTPSingleEntrySameNameDirIsCrawled(t *testing.T) {
+	base := mustParseURL(t, "ftp://example.com/dir")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.MaxDepth = -1
+	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+		switch u.Path {
+		case "/dir":
+			// Ambiguous listing: could be a file named "dir" or a directory
+			// holding one file named "dir".
+			return []ftpListingEntry{{name: "dir"}}, nil
+		case "/":
+			return []ftpListingEntry{{name: "dir", isDir: true}, {name: "other.txt"}}, nil
+		default:
+			return nil, errNotHTML
+		}
+	}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	urls := make([]string, 0, len(r.downloadEntries))
+	for _, e := range r.downloadEntries {
+		urls = append(urls, e.URL)
+	}
+	assert.Contains(t, urls, "ftp://example.com/dir/dir",
+		"the same-named child file inside the directory should be discovered")
+}
+
+// A genuine file (parent listing confirms file type) must still be treated as
+// a file, i.e. the disambiguation must not break the file case.
+func TestFTPSingleEntrySameNameFileIsDownloaded(t *testing.T) {
+	base := mustParseURL(t, "ftp://example.com/dir")
+	r := newTestClient(base)
+	r.OutputPath = tempDir(t)
+	r.urlCache = NewURLCache("")
+	r.ftpList = func(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
+		switch u.Path {
+		case "/dir":
+			return []ftpListingEntry{{name: "dir"}}, nil
+		case "/":
+			return []ftpListingEntry{{name: "dir"}, {name: "other.txt"}}, nil
+		default:
+			return nil, errNotHTML
+		}
+	}
+
+	r.subDownloadUrls(context.Background(), 0, base.String())
+	if assert.Len(t, r.downloadEntries, 1) {
+		assert.Equal(t, "ftp://example.com/dir", r.downloadEntries[0].URL)
+	}
+}
