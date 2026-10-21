@@ -2,6 +2,7 @@ package raria2
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -56,6 +57,16 @@ func ftpList(ctx context.Context, conn *ftp.ServerConn, listPath string) ([]*ftp
 	return entries, err
 }
 
+// ftpListError maps a failed LIST attempt: paths that do not look like
+// directories are reported as errNotHTML so the caller retries them as file
+// downloads, while real directory-listing failures surface as errors.
+func ftpListError(u *url.URL, err error) error {
+	if !strings.HasSuffix(u.Path, "/") {
+		return errNotHTML
+	}
+	return fmt.Errorf("FTP LIST failed for %s: %w", u.Path, err)
+}
+
 func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEntry, error) {
 	if r.ftpList != nil {
 		return r.ftpList(ctx, u)
@@ -83,7 +94,7 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 		pool2, entry2, reErr := r.ftpConnPoolGet(ctx, u)
 		if reErr != nil {
 			logger.WithError(reErr).Debug("FTP LIST: retry failed acquiring new connection")
-			return nil, errNotHTML
+			return nil, ftpListError(u, err)
 		}
 
 		logger2 := logrus.WithFields(entry2.logFields()).WithField("list_path", listPath)
@@ -92,7 +103,7 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 		if err != nil {
 			logger2.WithError(err).Debug("FTP LIST: retry failed; discarding connection")
 			pool2.discard(entry2)
-			return nil, errNotHTML
+			return nil, ftpListError(u, err)
 		}
 		logger2.WithField("entry_count", len(entries)).Debug("FTP LIST: retry succeeded")
 		pool2.put(entry2)
@@ -103,8 +114,12 @@ func (r *RAria2) ftpListEntries(ctx context.Context, u *url.URL) ([]ftpListingEn
 	logger.WithField("entry_count", len(entries)).Debug("FTP LIST: request succeeded")
 
 	if !strings.HasSuffix(u.Path, "/") {
+		// Some servers answer LIST on a file path with the file itself; the name
+		// may be the basename or the full server-side path.
 		base := path.Base(u.Path)
-		if len(entries) == 1 && entries[0] != nil && entries[0].Name == base && entries[0].Type == ftp.EntryTypeFile {
+		full := strings.TrimPrefix(u.Path, "/")
+		if len(entries) == 1 && entries[0] != nil && entries[0].Type == ftp.EntryTypeFile &&
+			(entries[0].Name == base || entries[0].Name == full || entries[0].Name == u.Path) {
 			return nil, errNotHTML
 		}
 	}
