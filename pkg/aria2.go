@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -36,7 +37,13 @@ type Aria2Manager struct {
 	Aria2AfterURLArgs      []string
 	WriteBatch             string
 	SkipCertificateCheck   bool
-	sinkFactory            func(context.Context, *RAria2) (downloadSink, error)
+	// Aria2StreamingAuto probes aria2 once per run for incremental stdin
+	// support (aria2/aria2#1161). A patched binary consumes -i - entries
+	// as they arrive, so session restarts are skipped entirely.
+	Aria2StreamingAuto  bool
+	sinkFactory         func(context.Context, *RAria2) (downloadSink, error)
+	sessionLimitOnce    sync.Once
+	resolvedSessionSize int
 }
 
 // NewAria2Manager creates a new aria2 manager
@@ -50,11 +57,22 @@ func NewAria2Manager() *Aria2Manager {
 
 // sessionEntryLimit returns the session limit based on configuration
 func (am *Aria2Manager) sessionEntryLimit() int {
+	am.sessionLimitOnce.Do(func() {
+		am.resolvedSessionSize = am.resolveSessionLimit()
+	})
+	return am.resolvedSessionSize
+}
+
+func (am *Aria2Manager) resolveSessionLimit() int {
 	if am.Aria2EntriesPerSession <= 0 {
 		return 0
 	}
 	if am.WriteBatch != "" {
 		logrus.Warn("--aria2-session-size is ignored when --write-batch is set")
+		return 0
+	}
+	if am.Aria2StreamingAuto && !am.DryRun && aria2StreamingProbe() {
+		logrus.Info("aria2 supports incremental stdin input; sending URLs without session restarts")
 		return 0
 	}
 	return am.Aria2EntriesPerSession
@@ -286,6 +304,105 @@ func (s *batchFileSink) Close() error {
 // an aria2 input file. It is distinct from sink I/O errors so the batch loop
 // can skip the offending entry instead of aborting the run.
 var errInvalidBatchEntry = errors.New("batch entry contains control characters")
+
+// aria2StreamingProbe is a seam so tests can stub the real binary probe.
+var aria2StreamingProbe = probeAria2StdinStreaming
+
+// probeDispatchMarkers lists console output fragments that prove aria2
+// dispatched a stdin-fed URL while the input pipe is still open. An
+// unpatched aria2 blocks inside fgets and prints nothing in that window.
+var probeDispatchMarkers = []string{
+	"Download aborted",
+	"Download complete",
+	"Downloading ",
+	"errorCode",
+	"[#",
+}
+
+// probeAria2StdinStreaming reports whether the aria2c binary on PATH consumes
+// -i - entries incrementally (i.e. includes the fix for aria2/aria2#1161).
+// It feeds one instantly-failing URL, keeps stdin open, and watches for
+// dispatch activity. The probe process is always killed afterwards.
+func probeAria2StdinStreaming() bool {
+	const (
+		decisionWindow = 1500 * time.Millisecond
+		overallTimeout = 5 * time.Second
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), overallTimeout)
+	defer cancel()
+
+	cmd := execCommand("aria2c",
+		"--input-file", "-", "--deferred-input=true",
+		"--console-log-level=notice", "--summary-interval=0",
+		"--max-tries=1", "--retry-wait=0",
+		"--connect-timeout=2", "--timeout=2")
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return false
+	}
+	outR, outW := io.Pipe()
+	cmd.Stdout = outW
+	cmd.Stderr = outW
+
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		defer func() { _ = outR.Close() }()
+		scanner := bufio.NewScanner(outR)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+
+	if err := cmd.Start(); err != nil {
+		_ = outW.Close()
+		return false
+	}
+
+	// Keep stdin open: patched aria2 dispatches the entry immediately,
+	// unpatched aria2 blocks in fgets until EOF.
+	if _, err := io.WriteString(stdin, "http://127.0.0.1:1/raria2-streaming-probe\n"); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return false
+	}
+
+	streaming := false
+	timer := time.NewTimer(decisionWindow)
+	defer timer.Stop()
+
+loop:
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				// Process closed its output - either exited or crashed;
+				// a patched binary may exit after the failed download if
+				// stdin closed early, treat any marker seen as positive.
+				break loop
+			}
+			for _, marker := range probeDispatchMarkers {
+				if strings.Contains(line, marker) {
+					streaming = true
+					break loop
+				}
+			}
+		case <-timer.C:
+			break loop
+		case <-ctx.Done():
+			break loop
+		}
+	}
+
+	_ = stdin.Close()
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	_ = cmd.Wait()
+	return streaming
+}
 
 func containsControlChar(s string) bool {
 	for _, r := range s {

@@ -36,10 +36,12 @@ Options:
                          Concurrent crawler threads [default: 5]
   --aria2-session-size SIZE
                          Number of links to feed a single aria2 process before
-                         closing stdin and restarting it. Defaults to 100 entries;
-                         set to 0 to keep a single session. See "Aria2 stdin bug
+                         closing stdin and restarting it. Set to 0 to keep a
+                         single session. When omitted, raria2 probes the aria2
+                         binary once and skips restarts entirely if it supports
+                         incremental stdin input (100 otherwise).
+                         See "Aria2 stdin bug
                          workaround" below for details.
-                         [default: 100]
   --max-depth DEPTH      Maximum HTML depth to crawl (-1 for unlimited) [default: -1]
   --accept EXT           Comma-separated list(s) of extensions to include (no dot, case-insensitive)
   --reject EXT           Comma-separated list(s) of extensions to exclude
@@ -130,9 +132,15 @@ raria2 -j 4 -w 8 --sftpgo-user=user --sftpgo-password=pass \
 
 Aria2 has an open bug ([aria2/aria2#1161](https://github.com/aria2/aria2/issues/1161))
 where downloads fed via stdin might not start until the input stream closes.
-When crawling large trees, use `--aria2-session-size` to periodically close and
-restart aria2 so downloads begin before the crawl finishes. This option only
-applies when streaming URLs directly to aria2 (normal mode), not when
+
+By default raria2 probes the aria2 binary once per run: if it supports
+incremental stdin input (e.g. a build containing the fix for #1161), URLs are
+streamed to a single long-lived aria2 process and no restarts are needed.
+Otherwise raria2 falls back to periodically closing and restarting aria2 every
+`--aria2-session-size` entries (100 by default) so downloads begin before the
+crawl finishes. Set `--aria2-session-size` explicitly to force a restart
+cadence (or `0` for a single session regardless of detection). This option
+only applies when streaming URLs directly to aria2 (normal mode), not when
 `--write-batch` is used.
 
 ## Session Management

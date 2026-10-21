@@ -29,7 +29,7 @@ type cliOptions struct {
 	MaxConnectionPerServer int           `arg:"-x,--max-connection-per-server" help:"Parallel connections per download" default:"5"`
 	MaxConcurrentDownload  int           `arg:"-j,--max-concurrent-downloads" help:"Maximum concurrent downloads" default:"5"`
 	Threads                int           `arg:"-w,--threads" help:"Concurrent crawler threads" default:"5"`
-	Aria2SessionSize       int           `arg:"--aria2-session-size" help:"Number of links to send to a single aria2c process before restarting it (0 = unlimited)" default:"100"`
+	Aria2SessionSize       *int          `arg:"--aria2-session-size" help:"Links per aria2c session before restarting it (0 = unlimited; default: auto-detect, uses 100 for unpatched aria2)"`
 	MaxDepth               int           `arg:"--max-depth" help:"Maximum HTML depth to crawl (-1 for unlimited)" default:"-1"`
 	AcceptExtensions       []string      `arg:"--accept,separate" help:"Comma-separated list(s) of file extensions to include (case-insensitive, without dot)"`
 	RejectExtensions       []string      `arg:"--reject,separate" help:"Comma-separated list(s) of file extensions to exclude"`
@@ -143,7 +143,14 @@ func run(opts *cliOptions) error {
 		return err
 	}
 	client.Threads = opts.Threads
-	client.Aria2EntriesPerSession = opts.Aria2SessionSize
+	if opts.Aria2SessionSize == nil {
+		// Auto mode: probe aria2 for incremental stdin support and fall
+		// back to periodic session restarts when it is missing.
+		client.Aria2StreamingAuto = true
+		client.Aria2EntriesPerSession = 100
+	} else {
+		client.Aria2EntriesPerSession = *opts.Aria2SessionSize
+	}
 
 	filters := client.FiltersConfig()
 	filters.AcceptMime = parseMimeArgs(opts.AcceptMime)

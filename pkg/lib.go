@@ -96,17 +96,21 @@ type RAria2 struct {
 	OutputPath             string
 	Aria2AfterURLArgs      []string
 	Aria2EntriesPerSession int
-	HTTPTimeout            time.Duration
-	UserAgent              string
-	RateLimit              float64
-	SkipCertificateCheck   bool
-	VisitedCachePath       string
-	WriteBatch             string
-	RespectRobots          bool
-	FollowExternal         bool
-	Filters                *FilterManager
-	httpClient             *HTTPClient
-	httpClientOnce         sync.Once
+	// Aria2StreamingAuto probes the aria2 binary once for incremental
+	// stdin support (aria2/aria2#1161); a patched binary makes session
+	// restarts unnecessary.
+	Aria2StreamingAuto   bool
+	HTTPTimeout          time.Duration
+	UserAgent            string
+	RateLimit            float64
+	SkipCertificateCheck bool
+	VisitedCachePath     string
+	WriteBatch           string
+	RespectRobots        bool
+	FollowExternal       bool
+	Filters              *FilterManager
+	httpClient           *HTTPClient
+	httpClientOnce       sync.Once
 
 	downloadEntries   []aria2URLEntry
 	downloadEntriesMu sync.Mutex
@@ -199,6 +203,7 @@ func (r *RAria2) aria2Manager() *Aria2Manager {
 	am.MaxConnectionPerServer = r.MaxConnectionPerServer
 	am.MaxConcurrentDownload = r.MaxConcurrentDownload
 	am.Aria2EntriesPerSession = r.Aria2EntriesPerSession
+	am.Aria2StreamingAuto = r.Aria2StreamingAuto
 	am.DryRun = r.DryRun
 	am.WriteBatch = r.WriteBatch
 	am.SkipCertificateCheck = r.SkipCertificateCheck
